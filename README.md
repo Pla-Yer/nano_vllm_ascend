@@ -1,7 +1,8 @@
-# nanovllm-ascend-m6
+# nano_vllm_ascend
 
-Minimal extraction of the current m6 path:
+A simaple nano vllm for Ascend NPU
 
+## Current Support
 - Qwen3 only
 - Ascend NPU only
 - bf16 only
