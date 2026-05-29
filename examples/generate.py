@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+import time
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -29,11 +30,14 @@ def main() -> None:
         block_size=args.block_size,
         device_id=args.device_id,
     )
+    t = time.time()
     texts = llm.generate(args.prompt, max_new_tokens=args.max_new_tokens)
     for i, text in enumerate(texts):
         print(f"\n===== output {i} =====")
         print(text)
-
+    print(f"Generation time: {time.time() - t:.2f} s")
+    throughput = sum(len(text) for text in texts) / (time.time() - t)
+    print(f"Throughput: {throughput:.2f} chars/s")
 
 if __name__ == "__main__":
     main()

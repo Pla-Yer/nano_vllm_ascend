@@ -152,7 +152,7 @@ class ModelRunner:
             seq_lens=seq_lens,
         )
 
-        outputs = self.model.forward_flat(
+        outputs = self.model(
             input_ids_flat=input_ids_flat,
             position_ids_flat=position_ids_flat,
             kv_cache=self.kv_cache,
@@ -189,7 +189,7 @@ class ModelRunner:
             q_len=1,
         )
 
-        outputs = self.model.forward_flat(
+        outputs = self.model(
             input_ids_flat=input_ids,
             position_ids_flat=cache_position,
             kv_cache=self.kv_cache,

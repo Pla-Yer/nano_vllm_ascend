@@ -166,7 +166,7 @@ class Qwen3Model(nn.Module):
             rope_theta=config.rope_theta,
         )
 
-    def forward_flat(
+    def forward(
         self,
         input_ids_flat: torch.Tensor,
         position_ids_flat: torch.Tensor,
@@ -201,7 +201,7 @@ class Qwen3ForCausalLM(nn.Module):
     def tie_weights(self) -> None:
         self.lm_head.weight = self.model.embed_tokens.weight
 
-    def forward_flat(
+    def forward(
         self,
         input_ids_flat: torch.Tensor,
         position_ids_flat: torch.Tensor,
@@ -209,7 +209,7 @@ class Qwen3ForCausalLM(nn.Module):
         attn_metadata,
         is_prefill: bool,
     ) -> CausalLMOutput:
-        hidden_states = self.model.forward_flat(
+        hidden_states = self.model(
             input_ids_flat=input_ids_flat,
             position_ids_flat=position_ids_flat,
             kv_cache=kv_cache,
