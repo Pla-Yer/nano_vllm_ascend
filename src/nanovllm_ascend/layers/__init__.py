@@ -8,6 +8,8 @@ __all__ = [
     "NpuBatchPrefillAttention",
     "RotaryEmbedding",
     "apply_rotary_pos_emb_tnd",
+    "Sampler",
+    "sample_tokens",
 ]
 
 
@@ -42,5 +44,12 @@ def __getattr__(name: str):
         return {
             "RotaryEmbedding": RotaryEmbedding,
             "apply_rotary_pos_emb_tnd": apply_rotary_pos_emb_tnd,
+        }[name]
+    if name in {"Sampler", "sample_tokens"}:
+        from .sampler import Sampler, sample_tokens
+
+        return {
+            "Sampler": Sampler,
+            "sample_tokens": sample_tokens,
         }[name]
     raise AttributeError(name)

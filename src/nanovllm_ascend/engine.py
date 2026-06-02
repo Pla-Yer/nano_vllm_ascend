@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-from .model_runner import ModelRunner
 from .sequence import Sequence, SequenceStatus
 from .scheduler import MiniScheduler
+from .sampling_params import SamplingParams
+
+
 class LLM:
     def __init__(
         self,
@@ -13,6 +15,8 @@ class LLM:
         max_num_seqs: int = 4,
         device_id: int = 0,
     ):
+        from .model_runner import ModelRunner
+
         self.runner = ModelRunner(
             model_path=model_path,
             max_model_len=max_model_len,
@@ -22,9 +26,40 @@ class LLM:
         )
         self.scheduler = MiniScheduler(max_num_seqs=max_num_seqs)
 
-    def generate(self, prompts: list[str], max_new_tokens: int = 128) -> list[str]:
+    def _resolve_sampling_params(
+        self,
+        sampling_params: SamplingParams | None,
+        *,
+        temperature: float | None,
+        top_k: int | None,
+        top_p: float | None,
+    ) -> SamplingParams:
+        base = sampling_params or SamplingParams()
+        return base.with_overrides(
+            temperature=temperature,
+            top_k=top_k,
+            top_p=top_p,
+        )
+
+    def generate(
+        self,
+        prompts: list[str],
+        max_new_tokens: int = 128,
+        sampling_params: SamplingParams | None = None,
+        *,
+        temperature: float | None = None,
+        top_k: int | None = None,
+        top_p: float | None = None,
+    ) -> list[str]:
         if not prompts:
             return []
+
+        resolved_sampling_params = self._resolve_sampling_params(
+            sampling_params,
+            temperature=temperature,
+            top_k=top_k,
+            top_p=top_p,
+        )
 
         scheduler = MiniScheduler(max_num_seqs=len(prompts))
 
@@ -39,7 +74,7 @@ class LLM:
             # 1. Admit waiting requests to prefill
             prefill_seqs = scheduler.schedule_prefill()
             if prefill_seqs:
-                self.runner.prefill(prefill_seqs)
+                self.runner.prefill(prefill_seqs, resolved_sampling_params)
 
             # 2. Select running requests for decode
             running_seqs = scheduler.schedule_decode()
@@ -64,7 +99,7 @@ class LLM:
 
             # 3. Decode one token for active sequences
             if decode_seqs:
-                self.runner.decode(decode_seqs)
+                self.runner.decode(decode_seqs, resolved_sampling_params)
         return [
             {
                 "texts": self.runner.tokenizer.decode(

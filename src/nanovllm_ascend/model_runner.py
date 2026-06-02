@@ -4,9 +4,11 @@ import torch
 import torch_npu
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
+from .layers import Sampler
 from .models.qwen3 import Qwen3ForCausalLM
 from .npu.paged_kv_cache import PagedKVCache
 from .npu.block_manager import BlockManager
+from .sampling_params import SamplingParams
 from .sequence import Sequence
 
 class ModelRunner:
@@ -25,6 +27,7 @@ class ModelRunner:
         self.block_size = block_size
         self.device = "npu"
         self.dtype = torch.bfloat16
+        self.sampler = Sampler()
 
         self.tokenizer = AutoTokenizer.from_pretrained(
             model_path,
@@ -136,7 +139,7 @@ class ModelRunner:
         )
 
     @torch.inference_mode()
-    def prefill(self, seqs: list[Sequence]) -> None:
+    def prefill(self, seqs: list[Sequence], sampling_params: SamplingParams) -> None:
         if not seqs:
             return
 
@@ -161,7 +164,7 @@ class ModelRunner:
         )
 
         last_logits = outputs.logits.index_select(0, last_token_indices)
-        next_tokens_tensor = torch.argmax(last_logits, dim=-1)
+        next_tokens_tensor = self.sampler.sample(last_logits, sampling_params)
         next_tokens = [int(x) for x in next_tokens_tensor.detach().cpu().tolist()]
 
         for seq, next_token, prompt_len in zip(seqs, next_tokens, seq_lens):
@@ -171,7 +174,7 @@ class ModelRunner:
             )
 
     @torch.inference_mode()
-    def decode(self, seqs: list[Sequence]) -> None:
+    def decode(self, seqs: list[Sequence], sampling_params: SamplingParams) -> None:
         if not seqs:
             return
 
@@ -204,7 +207,7 @@ class ModelRunner:
             is_prefill=False,
         )
 
-        next_tokens_tensor = torch.argmax(outputs.logits, dim=-1)
+        next_tokens_tensor = self.sampler.sample(outputs.logits, sampling_params)
         next_tokens = [int(x) for x in next_tokens_tensor.detach().cpu().tolist()]
 
         for seq, next_token in zip(seqs, next_tokens):

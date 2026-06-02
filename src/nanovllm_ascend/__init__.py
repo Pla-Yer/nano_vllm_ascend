@@ -3,8 +3,11 @@ def __getattr__(name: str):
         from .engine import LLM
 
         return LLM
+    if name == "SamplingParams":
+        from .sampling_params import SamplingParams
+
+        return SamplingParams
     raise AttributeError(name)
 
 
-__all__ = ["LLM"]
-
+__all__ = ["LLM", "SamplingParams"]

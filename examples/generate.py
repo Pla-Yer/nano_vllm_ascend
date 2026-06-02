@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from nanovllm_ascend import LLM
+from nanovllm_ascend import SamplingParams
 
 
 def parse_args():
@@ -19,6 +20,9 @@ def parse_args():
     parser.add_argument("--max-model-len", type=int, default=2048)
     parser.add_argument("--block-size", type=int, default=128)
     parser.add_argument("--device-id", type=int, default=0)
+    parser.add_argument("--temperature", type=float, default=0.0)
+    parser.add_argument("--top-k", type=int, default=0)
+    parser.add_argument("--top-p", type=float, default=1.0)
     return parser.parse_args()
 
 
@@ -33,7 +37,15 @@ def main() -> None:
     )
 
     t = time.time()
-    output = llm.generate(args.prompt, max_new_tokens=args.max_new_tokens)
+    output = llm.generate(
+        args.prompt,
+        max_new_tokens=args.max_new_tokens,
+        sampling_params=SamplingParams(
+            temperature=args.temperature,
+            top_k=args.top_k,
+            top_p=args.top_p,
+        ),
+    )
     print(f"Generation time: {time.time() - t:.2f} s")
     
     for i, out in enumerate(output):
@@ -46,4 +58,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
