@@ -1,66 +1,79 @@
 from __future__ import annotations
 
 from .model_runner import ModelRunner
-
-
+from .sequence import Sequence, SequenceStatus
+from .scheduler import MiniScheduler
 class LLM:
     def __init__(
         self,
         model_path: str,
         max_model_len: int = 2048,
         block_size: int = 128,
+        num_blocks: int = 12,
+        max_num_seqs: int = 4,
         device_id: int = 0,
     ):
         self.runner = ModelRunner(
             model_path=model_path,
             max_model_len=max_model_len,
+            num_blocks=num_blocks,
             block_size=block_size,
             device_id=device_id,
         )
+        self.scheduler = MiniScheduler(max_num_seqs=max_num_seqs)
 
     def generate(self, prompts: list[str], max_new_tokens: int = 128) -> list[str]:
         if not prompts:
             return []
 
-        batch_size = len(prompts)
-        generated_token_ids = [[] for _ in range(batch_size)]
-        finished = [False for _ in range(batch_size)]
+        scheduler = MiniScheduler(max_num_seqs=len(prompts))
 
-        prefill = self.runner.prefill(prompts)
-        next_tokens = prefill.next_tokens
-        cache_positions = prefill.seq_lens.copy()
+        seqs = [
+            scheduler.add_request(prompt, max_new_tokens=max_new_tokens)
+            for prompt in prompts
+        ]
 
-        for _ in range(max_new_tokens):
-            active_slots: list[int] = []
-            active_tokens: list[int] = []
-            active_positions: list[int] = []
+        eos_token_id = int(self.runner.tokenizer.eos_token_id)
 
-            for seq_slot in range(batch_size):
-                if finished[seq_slot]:
+        while scheduler.has_unfinished():
+            # 1. Admit waiting requests to prefill
+            prefill_seqs = scheduler.schedule_prefill()
+            if prefill_seqs:
+                self.runner.prefill(prefill_seqs)
+
+            # 2. Select running requests for decode
+            running_seqs = scheduler.schedule_decode()
+
+            decode_seqs: list[Sequence] = []
+
+            for seq in running_seqs:
+                if seq.next_token_id is None:
                     continue
 
-                token_id = next_tokens[seq_slot]
-                if token_id == prefill.eos_token_id:
-                    finished[seq_slot] = True
+                if seq.next_token_id == eos_token_id:
+                    self.runner.free_seq(seq)
+                    scheduler.finish_sequence(seq)
                     continue
 
-                generated_token_ids[seq_slot].append(token_id)
-                active_slots.append(seq_slot)
-                active_tokens.append(token_id)
-                active_positions.append(cache_positions[seq_slot])
+                if seq.reach_max_tokens():
+                    self.runner.free_seq(seq)
+                    scheduler.finish_sequence(seq)
+                    continue
 
-            if not active_slots:
-                break
+                decode_seqs.append(seq)
 
-            new_next_tokens = self.runner.decode(
-                active_slots=active_slots,
-                token_ids=active_tokens,
-                cache_positions=active_positions,
-            )
-
-            for i, seq_slot in enumerate(active_slots):
-                next_tokens[seq_slot] = new_next_tokens[i]
-                cache_positions[seq_slot] += 1
-
-        return self.runner.decode_token_ids(generated_token_ids)
-
+            # 3. Decode one token for active sequences
+            if decode_seqs:
+                self.runner.decode(decode_seqs)
+        return [
+            {
+                "texts": self.runner.tokenizer.decode(
+                    seq.generated_token_ids,
+                    skip_special_tokens=True,
+                ),
+                "token_ids": list(seq.generated_token_ids),
+            }
+            for seq in seqs
+        ]
+    
+        

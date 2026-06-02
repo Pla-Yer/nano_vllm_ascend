@@ -24,20 +24,25 @@ def parse_args():
 
 def main() -> None:
     args = parse_args()
+
     llm = LLM(
         model_path=args.model_path,
         max_model_len=args.max_model_len,
         block_size=args.block_size,
         device_id=args.device_id,
     )
+
     t = time.time()
-    texts = llm.generate(args.prompt, max_new_tokens=args.max_new_tokens)
-    for i, text in enumerate(texts):
-        print(f"\n===== output {i} =====")
-        print(text)
+    output = llm.generate(args.prompt, max_new_tokens=args.max_new_tokens)
     print(f"Generation time: {time.time() - t:.2f} s")
-    throughput = sum(len(text) for text in texts) / (time.time() - t)
-    print(f"Throughput: {throughput:.2f} chars/s")
+    
+    for i, out in enumerate(output):
+        print(f"\n===== output {i} =====")
+        print(out['texts'])
+    
+    throughput = sum(len(out['token_ids'])  for out in output) / (time.time() - t)
+
+    print(f"Throughput: {throughput:.2f} tokens/s")
 
 if __name__ == "__main__":
     main()

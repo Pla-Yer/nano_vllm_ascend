@@ -1,27 +1,20 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 import torch
 import torch_npu
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
 from .models.qwen3 import Qwen3ForCausalLM
 from .npu.paged_kv_cache import PagedKVCache
-
-
-@dataclass
-class PrefillResult:
-    next_tokens: list[int]
-    seq_lens: list[int]
-    eos_token_id: int
-
+from .npu.block_manager import BlockManager
+from .sequence import Sequence
 
 class ModelRunner:
     def __init__(
         self,
         model_path: str,
         max_model_len: int,
+        num_blocks: int,
         block_size: int,
         device_id: int,
     ):
@@ -47,8 +40,23 @@ class ModelRunner:
         self.config.nanovllm_max_model_len = max_model_len
 
         self.model = self._load_model()
-        self.kv_cache: PagedKVCache | None = None
+        self.num_blocks =  num_blocks #  should be tuned based on NPU memory and model size
 
+        self.block_manager = BlockManager(
+            num_blocks=self.num_blocks,
+            block_size=block_size,
+            device=self.device,
+        )
+
+        self.kv_cache = PagedKVCache(
+            num_layers=self.config.num_hidden_layers,
+            num_blocks=self.num_blocks,
+            block_size=self.block_size,
+            num_kv_heads=self.config.num_key_value_heads,
+            head_dim=self.config.head_dim,
+            dtype=self.dtype,
+            device=self.device,
+        )
     @torch.inference_mode()
     def _load_model(self) -> Qwen3ForCausalLM:
         hf_model = AutoModelForCausalLM.from_pretrained(
@@ -76,19 +84,6 @@ class ModelRunner:
         model.eval()
         del hf_model
         return model
-
-    def _new_kv_cache(self, batch_size: int) -> PagedKVCache:
-        num_blocks_per_seq = (self.max_model_len + self.block_size - 1) // self.block_size
-        return PagedKVCache(
-            num_layers=self.config.num_hidden_layers,
-            num_blocks=batch_size * num_blocks_per_seq,
-            block_size=self.block_size,
-            max_num_seqs=batch_size,
-            num_kv_heads=self.config.num_key_value_heads,
-            head_dim=self.config.head_dim,
-            dtype=self.dtype,
-            device=self.device,
-        )
 
     def _tokenize_prompts(self, prompts: list[str]):
         input_ids_list = []
@@ -141,14 +136,19 @@ class ModelRunner:
         )
 
     @torch.inference_mode()
-    def prefill(self, prompts: list[str]) -> PrefillResult:
-        batch_size = len(prompts)
-        self.kv_cache = self._new_kv_cache(batch_size)
+    def prefill(self, seqs: list[Sequence]) -> None:
+        if not seqs:
+            return
 
-        input_ids_flat, position_ids_flat, seq_lens, last_token_indices = self._tokenize_prompts(prompts)
-        seq_slots = torch.arange(batch_size, dtype=torch.long, device=self.device)
-        attn_metadata = self.kv_cache.prepare_prefill_metadata(
-            seq_slots=seq_slots,
+        prompts = [seq.prompt for seq in seqs]
+        seq_ids = [seq.seq_id for seq in seqs]
+
+        input_ids_flat, position_ids_flat, seq_lens, last_token_indices = (
+            self._tokenize_prompts(prompts)
+        )
+
+        attn_metadata = self.block_manager.prepare_prefill_metadata(
+            slots=seq_ids,
             seq_lens=seq_lens,
         )
 
@@ -159,48 +159,56 @@ class ModelRunner:
             attn_metadata=attn_metadata,
             is_prefill=True,
         )
+
         last_logits = outputs.logits.index_select(0, last_token_indices)
         next_tokens_tensor = torch.argmax(last_logits, dim=-1)
         next_tokens = [int(x) for x in next_tokens_tensor.detach().cpu().tolist()]
 
-        return PrefillResult(
-            next_tokens=next_tokens,
-            seq_lens=seq_lens,
-            eos_token_id=int(self.tokenizer.eos_token_id),
-        )
+        for seq, next_token, prompt_len in zip(seqs, next_tokens, seq_lens):
+            seq.set_prefill_result(
+                next_token_id=next_token,
+                prompt_len=prompt_len,
+            )
 
     @torch.inference_mode()
-    def decode(
-        self,
-        active_slots: list[int],
-        token_ids: list[int],
-        cache_positions: list[int],
-    ) -> list[int]:
-        if self.kv_cache is None:
-            raise RuntimeError("prefill must run before decode")
+    def decode(self, seqs: list[Sequence]) -> None:
+        if not seqs:
+            return
 
-        input_ids = torch.tensor(token_ids, dtype=torch.long, device=self.device)
-        seq_slots = torch.tensor(active_slots, dtype=torch.long, device=self.device)
-        cache_position = torch.tensor(cache_positions, dtype=torch.long, device=self.device)
+        token_ids = [seq.append_next_token() for seq in seqs]
+        cache_positions = [seq.cache_position for seq in seqs]
+        seq_ids = [seq.seq_id for seq in seqs]
 
-        attn_metadata = self.kv_cache.prepare_metadata(
-            seq_slots=seq_slots,
-            start_pos=cache_position,
+        input_ids = torch.tensor(
+            token_ids,
+            dtype=torch.long,
+            device=self.device,
+        )
+        position_ids = torch.tensor(
+            cache_positions,
+            dtype=torch.long,
+            device=self.device,
+        )
+
+        attn_metadata = self.block_manager.prepare_decode_metadata(
+            slots=seq_ids,
+            start_positions=cache_positions,
             q_len=1,
         )
 
         outputs = self.model(
             input_ids_flat=input_ids,
-            position_ids_flat=cache_position,
+            position_ids_flat=position_ids,
             kv_cache=self.kv_cache,
             attn_metadata=attn_metadata,
             is_prefill=False,
         )
-        next_tokens = torch.argmax(outputs.logits, dim=-1)
-        return [int(x) for x in next_tokens.detach().cpu().tolist()]
 
-    def decode_token_ids(self, generated_token_ids: list[list[int]]) -> list[str]:
-        return [
-            self.tokenizer.decode(ids, skip_special_tokens=True)
-            for ids in generated_token_ids
-        ]
+        next_tokens_tensor = torch.argmax(outputs.logits, dim=-1)
+        next_tokens = [int(x) for x in next_tokens_tensor.detach().cpu().tolist()]
+
+        for seq, next_token in zip(seqs, next_tokens):
+            seq.set_decode_result(next_token)
+    
+    def free_seq(self, seq: Sequence) -> None:
+      self.block_manager.free_slot(seq.seq_id)
