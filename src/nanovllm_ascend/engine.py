@@ -4,6 +4,46 @@ from .scheduler import MiniScheduler
 from .sampling_params import SamplingParams
 
 
+class EngineCore:
+    def __init__(self, runner, scheduler: MiniScheduler):
+        self.runner = runner
+        self.scheduler = scheduler
+
+    def _free_finished(self, seqs) -> None:
+        for seq in seqs:
+            try:
+                self.runner.free_seq(seq)
+            except Exception:
+                pass
+
+    def _abort_and_free(self, seqs) -> None:
+        for seq in self.scheduler.abort_sequences(seqs):
+            try:
+                self.runner.free_seq(seq)
+            except Exception:
+                pass
+
+    def step(self, eos_token_id: int) -> None:
+        step = self.scheduler.plan_next_step(eos_token_id)
+        self._free_finished(step.finish_seqs)
+
+        if step.prefill_seqs:
+            try:
+                self.runner.prefill(step.prefill_seqs)
+            except RuntimeError:
+                self._abort_and_free(step.prefill_seqs)
+
+        if step.decode_seqs:
+            try:
+                self.runner.decode(step.decode_seqs)
+            except RuntimeError:
+                self._abort_and_free(step.decode_seqs)
+
+    def run(self, eos_token_id: int) -> None:
+        while self.scheduler.has_unfinished():
+            self.step(eos_token_id)
+
+
 class LLM:
     def __init__(
         self,
@@ -28,6 +68,14 @@ class LLM:
             block_size=block_size,
             total_num_blocks=num_blocks,
         )
+        self.engine_core = EngineCore(self.runner, self.scheduler)
+
+    def _get_engine_core(self) -> EngineCore:
+        engine_core = getattr(self, "engine_core", None)
+        if engine_core is None:
+            engine_core = EngineCore(self.runner, self.scheduler)
+            self.engine_core = engine_core
+        return engine_core
 
     def _resolve_sampling_params(
         self,
@@ -78,35 +126,7 @@ class LLM:
         ]
 
         eos_token_id = int(self.runner.tokenizer.eos_token_id)
-
-        while self.scheduler.has_unfinished():
-            step = self.scheduler.plan_next_step(eos_token_id)
-
-            for seq in step.finish_seqs:
-                try:
-                    self.runner.free_seq(seq)
-                except Exception:
-                    pass
-
-            if step.prefill_seqs:
-                try:
-                    self.runner.prefill(step.prefill_seqs)
-                except RuntimeError:
-                    for seq in self.scheduler.abort_sequences(step.prefill_seqs):
-                        try:
-                            self.runner.free_seq(seq)
-                        except Exception:
-                            pass
-
-            if step.decode_seqs:
-                try:
-                    self.runner.decode(step.decode_seqs)
-                except RuntimeError:
-                    for seq in self.scheduler.abort_sequences(step.decode_seqs):
-                        try:
-                            self.runner.free_seq(seq)
-                        except Exception:
-                            pass
+        self._get_engine_core().run(eos_token_id)
 
         return [
             {
