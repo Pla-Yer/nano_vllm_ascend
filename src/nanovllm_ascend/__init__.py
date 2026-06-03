@@ -1,8 +1,8 @@
 def __getattr__(name: str):
-    if name == "LLM":
-        from .engine import LLM
+    if name in {"LLM", "EngineCore"}:
+        from .engine import EngineCore, LLM
 
-        return LLM
+        return {"LLM": LLM, "EngineCore": EngineCore}[name]
     if name == "SamplingParams":
         from .sampling_params import SamplingParams
 
@@ -10,4 +10,4 @@ def __getattr__(name: str):
     raise AttributeError(name)
 
 
-__all__ = ["LLM", "SamplingParams"]
+__all__ = ["LLM", "EngineCore", "SamplingParams"]
