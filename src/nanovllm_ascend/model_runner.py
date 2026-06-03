@@ -8,7 +8,6 @@ from .layers import Sampler
 from .models.qwen3 import Qwen3ForCausalLM
 from .npu.paged_kv_cache import PagedKVCache
 from .npu.block_manager import BlockManager
-from .sampling_params import SamplingParams
 from .sequence import Sequence
 
 class ModelRunner:
@@ -88,36 +87,37 @@ class ModelRunner:
         del hf_model
         return model
 
-    def _tokenize_prompts(self, prompts: list[str]):
-        input_ids_list = []
-        seq_lens = []
+    def _tokenize_prompt(self, prompt: str) -> torch.Tensor:
+        messages = [{"role": "user", "content": prompt}]
+        try:
+            inputs = self.tokenizer.apply_chat_template(
+                messages,
+                add_generation_prompt=True,
+                enable_thinking=False,
+                tokenize=True,
+                return_dict=True,
+                return_tensors="pt",
+            )
+        except TypeError:
+            inputs = self.tokenizer.apply_chat_template(
+                messages,
+                add_generation_prompt=True,
+                tokenize=True,
+                return_dict=True,
+                return_tensors="pt",
+            )
+        return inputs["input_ids"][0]
 
-        for prompt in prompts:
-            messages = [{"role": "user", "content": prompt}]
-            try:
-                inputs = self.tokenizer.apply_chat_template(
-                    messages,
-                    add_generation_prompt=True,
-                    enable_thinking=False,
-                    tokenize=True,
-                    return_dict=True,
-                    return_tensors="pt",
-                )
-            except TypeError:
-                inputs = self.tokenizer.apply_chat_template(
-                    messages,
-                    add_generation_prompt=True,
-                    tokenize=True,
-                    return_dict=True,
-                    return_tensors="pt",
-                )
-
-            ids = inputs["input_ids"][0]
-            input_ids_list.append(ids)
-            seq_lens.append(ids.numel())
-
+    def tokenize_prompts(self, prompts: list[str]) -> list[torch.Tensor]:
+        prompt_token_ids = [self._tokenize_prompt(prompt) for prompt in prompts]
+        seq_lens = [int(token_ids.numel()) for token_ids in prompt_token_ids]
         if max(seq_lens) > self.max_model_len:
             raise ValueError(f"prompt length {max(seq_lens)} exceeds max_model_len {self.max_model_len}")
+        return prompt_token_ids
+
+    def _prepare_prefill_inputs(self, seqs: list[Sequence]):
+        input_ids_list = [seq.prompt_token_ids for seq in seqs]
+        seq_lens = [seq.estimated_prompt_len for seq in seqs]
 
         input_ids_flat = torch.cat(input_ids_list, dim=0).to(self.device)
         position_ids_flat = torch.cat(
@@ -139,15 +139,14 @@ class ModelRunner:
         )
 
     @torch.inference_mode()
-    def prefill(self, seqs: list[Sequence], sampling_params: SamplingParams) -> None:
+    def prefill(self, seqs: list[Sequence]) -> None:
         if not seqs:
             return
 
-        prompts = [seq.prompt for seq in seqs]
         seq_ids = [seq.seq_id for seq in seqs]
 
         input_ids_flat, position_ids_flat, seq_lens, last_token_indices = (
-            self._tokenize_prompts(prompts)
+            self._prepare_prefill_inputs(seqs)
         )
 
         attn_metadata = self.block_manager.prepare_prefill_metadata(
@@ -164,17 +163,15 @@ class ModelRunner:
         )
 
         last_logits = outputs.logits.index_select(0, last_token_indices)
-        next_tokens_tensor = self.sampler.sample(last_logits, sampling_params)
-        next_tokens = [int(x) for x in next_tokens_tensor.detach().cpu().tolist()]
-
-        for seq, next_token, prompt_len in zip(seqs, next_tokens, seq_lens):
+        for seq, logits in zip(seqs, last_logits.unbind(0)):
+            next_token = int(self.sampler.sample(logits.unsqueeze(0), seq.sampling_params).item())
             seq.set_prefill_result(
                 next_token_id=next_token,
-                prompt_len=prompt_len,
+                prompt_len=seq.estimated_prompt_len,
             )
 
     @torch.inference_mode()
-    def decode(self, seqs: list[Sequence], sampling_params: SamplingParams) -> None:
+    def decode(self, seqs: list[Sequence]) -> None:
         if not seqs:
             return
 
@@ -207,10 +204,8 @@ class ModelRunner:
             is_prefill=False,
         )
 
-        next_tokens_tensor = self.sampler.sample(outputs.logits, sampling_params)
-        next_tokens = [int(x) for x in next_tokens_tensor.detach().cpu().tolist()]
-
-        for seq, next_token in zip(seqs, next_tokens):
+        for seq, logits in zip(seqs, outputs.logits.unbind(0)):
+            next_token = int(self.sampler.sample(logits.unsqueeze(0), seq.sampling_params).item())
             seq.set_decode_result(next_token)
     
     def free_seq(self, seq: Sequence) -> None:

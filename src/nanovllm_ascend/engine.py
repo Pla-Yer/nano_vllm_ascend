@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from .sequence import Sequence, SequenceStatus
 from .scheduler import MiniScheduler
 from .sampling_params import SamplingParams
 
@@ -24,7 +23,11 @@ class LLM:
             block_size=block_size,
             device_id=device_id,
         )
-        self.scheduler = MiniScheduler(max_num_seqs=max_num_seqs)
+        self.scheduler = MiniScheduler(
+            max_num_seqs=max_num_seqs,
+            block_size=block_size,
+            total_num_blocks=num_blocks,
+        )
 
     def _resolve_sampling_params(
         self,
@@ -61,45 +64,50 @@ class LLM:
             top_p=top_p,
         )
 
-        scheduler = MiniScheduler(max_num_seqs=len(prompts))
+        self.scheduler.reset()
+        prompt_token_ids = self.runner.tokenize_prompts(prompts)
 
         seqs = [
-            scheduler.add_request(prompt, max_new_tokens=max_new_tokens)
-            for prompt in prompts
+            self.scheduler.add_request(
+                prompt,
+                max_new_tokens=max_new_tokens,
+                prompt_token_ids=token_ids,
+                sampling_params=resolved_sampling_params,
+            )
+            for prompt, token_ids in zip(prompts, prompt_token_ids)
         ]
 
         eos_token_id = int(self.runner.tokenizer.eos_token_id)
 
-        while scheduler.has_unfinished():
-            # 1. Admit waiting requests to prefill
-            prefill_seqs = scheduler.schedule_prefill()
-            if prefill_seqs:
-                self.runner.prefill(prefill_seqs, resolved_sampling_params)
+        while self.scheduler.has_unfinished():
+            step = self.scheduler.plan_next_step(eos_token_id)
 
-            # 2. Select running requests for decode
-            running_seqs = scheduler.schedule_decode()
-
-            decode_seqs: list[Sequence] = []
-
-            for seq in running_seqs:
-                if seq.next_token_id is None:
-                    continue
-
-                if seq.next_token_id == eos_token_id:
+            for seq in step.finish_seqs:
+                try:
                     self.runner.free_seq(seq)
-                    scheduler.finish_sequence(seq)
-                    continue
+                except Exception:
+                    pass
 
-                if seq.reach_max_tokens():
-                    self.runner.free_seq(seq)
-                    scheduler.finish_sequence(seq)
-                    continue
+            if step.prefill_seqs:
+                try:
+                    self.runner.prefill(step.prefill_seqs)
+                except RuntimeError:
+                    for seq in self.scheduler.abort_sequences(step.prefill_seqs):
+                        try:
+                            self.runner.free_seq(seq)
+                        except Exception:
+                            pass
 
-                decode_seqs.append(seq)
+            if step.decode_seqs:
+                try:
+                    self.runner.decode(step.decode_seqs)
+                except RuntimeError:
+                    for seq in self.scheduler.abort_sequences(step.decode_seqs):
+                        try:
+                            self.runner.free_seq(seq)
+                        except Exception:
+                            pass
 
-            # 3. Decode one token for active sequences
-            if decode_seqs:
-                self.runner.decode(decode_seqs, resolved_sampling_params)
         return [
             {
                 "texts": self.runner.tokenizer.decode(

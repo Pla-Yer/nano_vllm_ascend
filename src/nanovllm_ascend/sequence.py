@@ -3,6 +3,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import torch
+
+    from .sampling_params import SamplingParams
 
 
 class SequenceStatus(str, Enum):
@@ -16,8 +22,13 @@ class Sequence:
     seq_id: int
     prompt: str
     max_new_tokens: int
+    prompt_token_ids: "torch.Tensor | Any"
+    sampling_params: "SamplingParams"
 
     status: SequenceStatus = SequenceStatus.WAITING
+    estimated_prompt_len: int = 0
+    reserved_blocks: int = 0
+    finish_reason: str | None = None
 
     # Filled after prefill
     prompt_len: int = 0
@@ -47,5 +58,6 @@ class Sequence:
     def reach_max_tokens(self) -> bool:
         return len(self.generated_token_ids) >= self.max_new_tokens
 
-    def finish(self) -> None:
+    def finish(self, reason: str | None = None) -> None:
         self.status = SequenceStatus.FINISHED
+        self.finish_reason = reason
