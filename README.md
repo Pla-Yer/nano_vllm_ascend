@@ -6,7 +6,7 @@ A simaple nano vllm for Ascend NPU
 - Qwen3 only
 - Ascend NPU only
 - bf16 only
-- batch prefill with `npu_fused_infer_attention_score`
+- prefill with `npu_fused_infer_attention_score`
 - decode with `_npu_paged_attention`
 
 ## Run

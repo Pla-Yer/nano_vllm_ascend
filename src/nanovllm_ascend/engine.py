@@ -12,35 +12,24 @@ class EngineCore:
 
     def _free_finished(self, seqs) -> None:
         for seq in seqs:
-            try:
-                self.runner.free_seq(seq)
-            except Exception:
-                pass
+            self.runner.free_seq(seq)
 
-    def _abort_and_free(self, seqs) -> None:
-        for seq in self.scheduler.abort_sequences(seqs):
-            try:
-                self.runner.free_seq(seq)
-            except Exception:
-                pass
-
-    def _commit_final_tokens(self, seqs) -> None:
+    def _commit_final_tokens(self, seqs):
         final_seqs = []
         for seq in seqs:
             seq.append_next_token()
             final_seqs.append(seq)
         finished = self.scheduler.finish_sequences(final_seqs, "max_new_tokens")
         self._free_finished(finished)
+        return finished
 
-    def step(self, eos_token_id: int) -> None:
+    def step(self, eos_token_id: int):
         step = self.scheduler.plan_next_step(eos_token_id)
         self._free_finished(step.finish_seqs)
+        finished_seqs = list(step.finish_seqs)
 
         if step.prefill_seqs:
-            try:
-                self.runner.prefill(step.prefill_seqs)
-            except RuntimeError:
-                self._abort_and_free(step.prefill_seqs)
+            self.runner.prefill(step.prefill_seqs)
 
         if step.decode_seqs:
             final_seqs = [
@@ -54,13 +43,12 @@ class EngineCore:
                 if len(seq.generated_token_ids) + 1 < seq.max_new_tokens
             ]
             if final_seqs:
-                self._commit_final_tokens(final_seqs)
+                finished_seqs.extend(self._commit_final_tokens(final_seqs))
             if not decode_seqs:
-                return
-            try:
-                self.runner.decode(decode_seqs)
-            except RuntimeError:
-                self._abort_and_free(decode_seqs)
+                return finished_seqs
+            self.runner.decode(decode_seqs)
+
+        return finished_seqs
 
     def run(self, eos_token_id: int) -> None:
         while self.scheduler.has_unfinished():
@@ -138,39 +126,77 @@ class LLM:
         )
 
         self.scheduler.reset()
-        prompt_token_ids = self.runner.tokenize_prompts(prompts)
-
-        seqs = [
-            Sequence(
-                seq_id=self.scheduler.next_seq_id(),
-                prompt=prompt,
+        request_ids = [
+            self.submit(
+                prompt,
                 max_new_tokens=max_new_tokens,
-                prompt_token_ids=token_ids,
                 sampling_params=resolved_sampling_params,
             )
-            for prompt, token_ids in zip(prompts, prompt_token_ids)
+            for prompt in prompts
         ]
-        self.runner.prepare_sequences(seqs)
-        for seq in seqs:
-            seq.reserved_blocks = self.scheduler.compute_required_blocks(
-                runtime_prompt_len=seq.runtime_prompt_len,
-                max_new_tokens=max_new_tokens,
-            )
-            self.scheduler.add_request(seq)
 
-        eos_token_id = int(self.runner.tokenizer.eos_token_id)
-        self._get_engine_core().run(eos_token_id)
+        outputs_by_request_id = {}
+        while self.has_unfinished():
+            for output in self.step():
+                outputs_by_request_id[output["request_id"]] = output
 
         return [
             {
+                "texts": outputs_by_request_id[request_id]["texts"],
+                "token_ids": outputs_by_request_id[request_id]["token_ids"],
+            }
+            for request_id in request_ids
+        ]
+
+    def submit(
+        self,
+        prompt: str,
+        max_new_tokens: int = 128,
+        sampling_params: SamplingParams | None = None,
+        *,
+        temperature: float | None = None,
+        top_k: int | None = None,
+        top_p: float | None = None,
+    ) -> int:
+        resolved_sampling_params = self._resolve_sampling_params(
+            sampling_params,
+            temperature=temperature,
+            top_k=top_k,
+            top_p=top_p,
+        )
+        token_ids = self.runner.tokenize_prompts([prompt])[0]
+        seq = Sequence(
+            seq_id=self.scheduler.next_seq_id(),
+            prompt=prompt,
+            max_new_tokens=max_new_tokens,
+            prompt_token_ids=token_ids,
+            sampling_params=resolved_sampling_params,
+        )
+        self.runner.prepare_sequences([seq])
+        seq.reserved_blocks = self.scheduler.compute_required_blocks(
+            runtime_prompt_len=seq.runtime_prompt_len,
+            max_new_tokens=max_new_tokens,
+        )
+        self.scheduler.add_request(seq)
+        return seq.seq_id
+
+    def step(self) -> list[dict[str, object]]:
+        eos_token_id = int(self.runner.tokenizer.eos_token_id)
+        finished = self._get_engine_core().step(eos_token_id)
+        return [
+            {
+                "request_id": seq.seq_id,
                 "texts": self.runner.tokenizer.decode(
                     seq.generated_token_ids,
                     skip_special_tokens=True,
                 ),
                 "token_ids": list(seq.generated_token_ids),
             }
-            for seq in seqs
+            for seq in finished
         ]
+
+    def has_unfinished(self) -> bool:
+        return self.scheduler.has_unfinished()
 
     def clear_prefix_cache(self) -> None:
         self.runner.clear_prefix_cache()
