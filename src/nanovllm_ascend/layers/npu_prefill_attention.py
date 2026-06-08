@@ -20,9 +20,10 @@ class NpuBatchPrefillAttention(nn.Module):
         self.head_dim = head_dim
         self.block_size = block_size
         self.max_mask_len = max_mask_len
+        self.fia_mask_len = max(max_mask_len, 2048)
         self.scale = head_dim ** -0.5
         attn_mask = torch.triu(
-            torch.ones(max_mask_len, max_mask_len, dtype=torch.int8),
+            torch.ones(self.fia_mask_len, self.fia_mask_len, dtype=torch.int8),
             diagonal=1,
         )
         self.register_buffer("attn_mask", attn_mask, persistent=False)

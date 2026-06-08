@@ -102,6 +102,41 @@ def test_step_driven_continuous_batching_admits_later_request_after_capacity_fre
     assert llm.runner.prefilled == [first_id, second_id]
 
 
+def test_step_driven_continuous_batching_runs_later_request_with_available_capacity():
+    llm = make_llm(max_num_seqs=2)
+
+    first_id = llm.submit("first", max_new_tokens=3)
+    assert llm.step() == []
+    second_id = llm.submit("second", max_new_tokens=2)
+
+    assert list(llm.scheduler.running) == [first_id]
+    assert [seq.seq_id for seq in llm.scheduler.waiting] == [second_id]
+
+    assert llm.step() == []
+    assert list(llm.scheduler.running) == [first_id, second_id]
+    assert list(llm.scheduler.waiting) == []
+    assert llm.runner.prefilled == [first_id, second_id]
+
+
+def test_step_driven_continuous_batching_can_admit_after_several_decode_steps():
+    llm = make_llm(max_num_seqs=2)
+
+    first_id = llm.submit("first", max_new_tokens=5)
+    assert llm.step() == []
+    assert llm.step() == []
+    assert llm.step() == []
+    second_id = llm.submit("second", max_new_tokens=2)
+
+    assert list(llm.scheduler.running) == [first_id]
+    assert [seq.seq_id for seq in llm.scheduler.waiting] == [second_id]
+    assert len(llm.scheduler.seqs[first_id].generated_token_ids) == 2
+
+    assert llm.step() == []
+    assert list(llm.scheduler.running) == [first_id, second_id]
+    assert list(llm.scheduler.waiting) == []
+    assert llm.runner.prefilled == [first_id, second_id]
+
+
 def test_generate_keeps_original_output_shape_and_order():
     llm = make_llm()
 
@@ -121,25 +156,29 @@ def scheduler_state(llm):
     }
 
 
-def run_fake_demo():
-    llm = make_llm(max_num_seqs=1)
+def run_fake_demo(args):
+    llm = make_llm(max_num_seqs=2)
 
-    first_id = llm.submit("first", max_new_tokens=3)
+    first_id = llm.submit("first", max_new_tokens=args.first_max_new_tokens)
     print(f"submit first request_id={first_id}")
     print(f"state={scheduler_state(llm)}")
 
-    print("\nstep 1: prefill first")
-    outputs = llm.step()
-    print(f"outputs={outputs}")
-    print(f"state={scheduler_state(llm)}")
+    final_outputs = []
+    for step_id in range(1, args.second_submit_after_steps + 1):
+        outputs = llm.step()
+        final_outputs.extend(outputs)
+        print(f"\nstep {step_id} before second submit")
+        print(f"outputs={outputs}")
+        print(f"state={scheduler_state(llm)}")
 
-    second_id = llm.submit("second", max_new_tokens=2)
+    second_id = llm.submit("second", max_new_tokens=args.second_max_new_tokens)
     print(f"\nsubmit second request_id={second_id} while first is running")
     print(f"state={scheduler_state(llm)}")
 
-    step_id = 2
+    step_id = args.second_submit_after_steps + 1
     while llm.has_unfinished():
         outputs = llm.step()
+        final_outputs.extend(outputs)
         print(f"\nstep {step_id}")
         print(f"outputs={outputs}")
         print(f"state={scheduler_state(llm)}")
@@ -152,7 +191,7 @@ def run_real_demo(args):
         max_model_len=args.max_model_len,
         block_size=args.block_size,
         num_blocks=args.num_blocks,
-        max_num_seqs=1,
+        max_num_seqs=args.max_num_seqs,
         device_id=args.device_id,
         enable_prefix_cache=args.enable_prefix_cache,
     )
@@ -168,13 +207,19 @@ def run_real_demo(args):
         sampling_params=sampling_params,
     )
     print(f"submit first request_id={first_id}")
+    print(f"first_reserved_blocks={llm.scheduler.seqs[first_id].reserved_blocks}")
     print(f"state={scheduler_state(llm)}")
 
     t0 = time.perf_counter()
-    outputs = llm.step()
-    print("\nstep 1: prefill first")
-    print(f"outputs={outputs}")
-    print(f"state={scheduler_state(llm)}")
+    final_outputs = []
+    start = time.perf_counter()
+    for step_id in range(1, args.second_submit_after_steps + 1):
+        outputs = llm.step()
+        final_outputs.extend(outputs)
+        print(f"\nstep {step_id} before second submit")
+        print(f"step latency={time.perf_counter() - start:.3f}s")
+        print(f"outputs={outputs}")
+        print(f"state={scheduler_state(llm)}")
 
     second_id = llm.submit(
         args.prompt[1],
@@ -182,14 +227,17 @@ def run_real_demo(args):
         sampling_params=sampling_params,
     )
     print(f"\nsubmit second request_id={second_id} while first is running")
+    print(f"second_reserved_blocks={llm.scheduler.seqs[second_id].reserved_blocks}")
+    print(f"max_num_seqs={args.max_num_seqs}")
+    print(f"num_blocks={args.num_blocks}")
     print(f"state={scheduler_state(llm)}")
 
-    step_id = 2
-    final_outputs = []
+    step_id = args.second_submit_after_steps + 1
     while llm.has_unfinished():
         outputs = llm.step()
         final_outputs.extend(outputs)
         print(f"\nstep {step_id}")
+        print(f"step latency={time.perf_counter() - start:.3f}s")
         print(f"outputs={outputs}")
         print(f"state={scheduler_state(llm)}")
         step_id += 1
@@ -210,11 +258,13 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model-path", default=os.environ.get("NANOVLLM_ASCEND_MODEL_PATH"))
     parser.add_argument("--prompt", action="append")
-    parser.add_argument("--first-max-new-tokens", type=int, default=4)
-    parser.add_argument("--second-max-new-tokens", type=int, default=2)
+    parser.add_argument("--first-max-new-tokens", type=int, default=128)
+    parser.add_argument("--second-max-new-tokens", type=int, default=128)
     parser.add_argument("--max-model-len", type=int, default=2048)
     parser.add_argument("--block-size", type=int, default=128)
     parser.add_argument("--num-blocks", type=int, default=12)
+    parser.add_argument("--max-num-seqs", type=int, default=2)
+    parser.add_argument("--second-submit-after-steps", type=int, default=10)
     parser.add_argument("--device-id", type=int, default=0)
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--top-k", type=int, default=0)
@@ -227,13 +277,13 @@ def main():
     args = parse_args()
     if args.model_path is None:
         print("No --model-path provided; running fake continuous batching demo.")
-        run_fake_demo()
+        run_fake_demo(args)
         return
 
     if args.prompt is None:
         args.prompt = [
-            "Explain continuous batching in one short paragraph.",
-            "Give one sentence about KV cache reuse.",
+            "Explain continuous batching",
+            "Explain kv cache",
         ]
     run_real_demo(args)
 
