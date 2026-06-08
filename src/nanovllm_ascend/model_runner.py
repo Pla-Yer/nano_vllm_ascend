@@ -10,6 +10,7 @@ from .npu.paged_kv_cache import PagedKVCache
 from .npu.block_manager import BlockManager
 from .sequence import Sequence
 
+
 class ModelRunner:
     def __init__(
         self,
@@ -18,6 +19,7 @@ class ModelRunner:
         num_blocks: int,
         block_size: int,
         device_id: int,
+        enable_prefix_cache: bool = False,
     ):
         torch.npu.set_device(device_id)
 
@@ -27,6 +29,7 @@ class ModelRunner:
         self.device = "npu"
         self.dtype = torch.bfloat16
         self.sampler = Sampler()
+        self.enable_prefix_cache = enable_prefix_cache
 
         self.tokenizer = AutoTokenizer.from_pretrained(
             model_path,
@@ -42,7 +45,7 @@ class ModelRunner:
         self.config.nanovllm_max_model_len = max_model_len
 
         self.model = self._load_model()
-        self.num_blocks =  num_blocks #  should be tuned based on NPU memory and model size
+        self.num_blocks = num_blocks  # should be tuned based on NPU memory and model size
 
         self.block_manager = BlockManager(
             num_blocks=self.num_blocks,
@@ -115,13 +118,43 @@ class ModelRunner:
             raise ValueError(f"prompt length {max(seq_lens)} exceeds max_model_len {self.max_model_len}")
         return prompt_token_ids
 
+    def prepare_sequences(self, seqs: list[Sequence]) -> None:
+        for seq in seqs:
+            seq.estimated_prompt_len = int(seq.prompt_token_ids.numel())
+            seq.cached_block_ids = []
+            seq.cached_prefix_len = 0
+
+            if self.enable_prefix_cache:
+                full_blocks = seq.estimated_prompt_len // self.block_size
+                max_cache_blocks = full_blocks
+                if seq.estimated_prompt_len % self.block_size == 0 and max_cache_blocks > 0:
+                    max_cache_blocks -= 1
+                if max_cache_blocks > 0:
+                    seq.cached_block_ids = self.block_manager.find_longest_prefix_blocks(
+                        seq.prompt_token_ids,
+                        max_cache_blocks=max_cache_blocks,
+                    )
+                    seq.cached_prefix_len = len(seq.cached_block_ids) * self.block_size
+
+            seq.runtime_prompt_token_ids = seq.prompt_token_ids[seq.cached_prefix_len :]
+            seq.runtime_prompt_len = int(seq.runtime_prompt_token_ids.numel())
+            if seq.runtime_prompt_len <= 0:
+                raise ValueError(f"seq {seq.seq_id} has empty runtime prompt suffix")
+
     def _prepare_prefill_inputs(self, seqs: list[Sequence]):
-        input_ids_list = [seq.prompt_token_ids for seq in seqs]
-        seq_lens = [seq.estimated_prompt_len for seq in seqs]
+        input_ids_list = [seq.runtime_prompt_token_ids for seq in seqs]
+        seq_lens = [seq.runtime_prompt_len for seq in seqs]
 
         input_ids_flat = torch.cat(input_ids_list, dim=0).to(self.device)
         position_ids_flat = torch.cat(
-            [torch.arange(seq_len, dtype=torch.long) for seq_len in seq_lens],
+            [
+                torch.arange(
+                    seq.cached_prefix_len,
+                    seq.cached_prefix_len + seq.runtime_prompt_len,
+                    dtype=torch.long,
+                )
+                for seq in seqs
+            ],
             dim=0,
         ).to(self.device)
 
@@ -152,6 +185,8 @@ class ModelRunner:
         attn_metadata = self.block_manager.prepare_prefill_metadata(
             slots=seq_ids,
             seq_lens=seq_lens,
+            start_positions=[seq.cached_prefix_len for seq in seqs],
+            prefix_block_ids=[seq.cached_block_ids for seq in seqs],
         )
 
         outputs = self.model(
@@ -169,6 +204,13 @@ class ModelRunner:
                 next_token_id=next_token,
                 prompt_len=seq.estimated_prompt_len,
             )
+            if self.enable_prefix_cache:
+                self.block_manager.cache_full_blocks(
+                    slot=seq.seq_id,
+                    token_ids=seq.prompt_token_ids,
+                    num_cached_blocks=len(seq.cached_block_ids),
+                    num_full_blocks=seq.estimated_prompt_len // self.block_size,
+                )
 
     @torch.inference_mode()
     def decode(self, seqs: list[Sequence]) -> None:
@@ -207,6 +249,9 @@ class ModelRunner:
         for seq, logits in zip(seqs, outputs.logits.unbind(0)):
             next_token = int(self.sampler.sample(logits.unsqueeze(0), seq.sampling_params).item())
             seq.set_decode_result(next_token)
-    
+
     def free_seq(self, seq: Sequence) -> None:
-      self.block_manager.free_slot(seq.seq_id)
+        self.block_manager.free_slot(seq.seq_id)
+
+    def clear_prefix_cache(self) -> None:
+        self.block_manager.clear_prefix_cache()

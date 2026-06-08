@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .sequence import Sequence
 from .scheduler import MiniScheduler
 from .sampling_params import SamplingParams
 
@@ -23,6 +24,14 @@ class EngineCore:
             except Exception:
                 pass
 
+    def _commit_final_tokens(self, seqs) -> None:
+        final_seqs = []
+        for seq in seqs:
+            seq.append_next_token()
+            final_seqs.append(seq)
+        finished = self.scheduler.finish_sequences(final_seqs, "max_new_tokens")
+        self._free_finished(finished)
+
     def step(self, eos_token_id: int) -> None:
         step = self.scheduler.plan_next_step(eos_token_id)
         self._free_finished(step.finish_seqs)
@@ -34,10 +43,24 @@ class EngineCore:
                 self._abort_and_free(step.prefill_seqs)
 
         if step.decode_seqs:
+            final_seqs = [
+                seq
+                for seq in step.decode_seqs
+                if len(seq.generated_token_ids) + 1 >= seq.max_new_tokens
+            ]
+            decode_seqs = [
+                seq
+                for seq in step.decode_seqs
+                if len(seq.generated_token_ids) + 1 < seq.max_new_tokens
+            ]
+            if final_seqs:
+                self._commit_final_tokens(final_seqs)
+            if not decode_seqs:
+                return
             try:
-                self.runner.decode(step.decode_seqs)
+                self.runner.decode(decode_seqs)
             except RuntimeError:
-                self._abort_and_free(step.decode_seqs)
+                self._abort_and_free(decode_seqs)
 
     def run(self, eos_token_id: int) -> None:
         while self.scheduler.has_unfinished():
@@ -53,6 +76,7 @@ class LLM:
         num_blocks: int = 12,
         max_num_seqs: int = 4,
         device_id: int = 0,
+        enable_prefix_cache: bool = False,
     ):
         from .model_runner import ModelRunner
 
@@ -62,6 +86,7 @@ class LLM:
             num_blocks=num_blocks,
             block_size=block_size,
             device_id=device_id,
+            enable_prefix_cache=enable_prefix_cache,
         )
         self.scheduler = MiniScheduler(
             max_num_seqs=max_num_seqs,
@@ -101,7 +126,7 @@ class LLM:
         temperature: float | None = None,
         top_k: int | None = None,
         top_p: float | None = None,
-    ) -> list[str]:
+    ) -> list[dict[str, object]]:
         if not prompts:
             return []
 
@@ -116,14 +141,22 @@ class LLM:
         prompt_token_ids = self.runner.tokenize_prompts(prompts)
 
         seqs = [
-            self.scheduler.add_request(
-                prompt,
+            Sequence(
+                seq_id=self.scheduler.next_seq_id(),
+                prompt=prompt,
                 max_new_tokens=max_new_tokens,
                 prompt_token_ids=token_ids,
                 sampling_params=resolved_sampling_params,
             )
             for prompt, token_ids in zip(prompts, prompt_token_ids)
         ]
+        self.runner.prepare_sequences(seqs)
+        for seq in seqs:
+            seq.reserved_blocks = self.scheduler.compute_required_blocks(
+                runtime_prompt_len=seq.runtime_prompt_len,
+                max_new_tokens=max_new_tokens,
+            )
+            self.scheduler.add_request(seq)
 
         eos_token_id = int(self.runner.tokenizer.eos_token_id)
         self._get_engine_core().run(eos_token_id)
@@ -138,5 +171,6 @@ class LLM:
             }
             for seq in seqs
         ]
-    
-        
+
+    def clear_prefix_cache(self) -> None:
+        self.runner.clear_prefix_cache()

@@ -29,6 +29,10 @@ class Sequence:
     estimated_prompt_len: int = 0
     reserved_blocks: int = 0
     finish_reason: str | None = None
+    cached_prefix_len: int = 0
+    cached_block_ids: list[int] = field(default_factory=list)
+    runtime_prompt_token_ids: "torch.Tensor | Any | None" = None
+    runtime_prompt_len: int = 0
 
     # Filled after prefill
     prompt_len: int = 0

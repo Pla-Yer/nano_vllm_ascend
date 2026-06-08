@@ -35,34 +35,18 @@ class MiniScheduler:
         self.reserved_blocks_total = 0
         self._next_seq_id = 0
 
-    def add_request(
-        self,
-        prompt: str,
-        max_new_tokens: int,
-        prompt_token_ids,
-        sampling_params,
-    ) -> Sequence:
-        estimated_prompt_len = int(prompt_token_ids.numel())
-        reserved_blocks = self.compute_required_blocks(
-            estimated_prompt_len=estimated_prompt_len,
-            max_new_tokens=max_new_tokens,
-        )
-        seq = Sequence(
-            seq_id=self._next_seq_id,
-            prompt=prompt,
-            max_new_tokens=max_new_tokens,
-            prompt_token_ids=prompt_token_ids,
-            sampling_params=sampling_params,
-            estimated_prompt_len=estimated_prompt_len,
-            reserved_blocks=reserved_blocks,
-        )
+    def next_seq_id(self) -> int:
+        seq_id = self._next_seq_id
         self._next_seq_id += 1
+        return seq_id
+
+    def add_request(self, seq: Sequence) -> Sequence:
         self.seqs[seq.seq_id] = seq
         self.waiting.append(seq)
         return seq
 
-    def compute_required_blocks(self, estimated_prompt_len: int, max_new_tokens: int) -> int:
-        total_tokens = estimated_prompt_len + max_new_tokens
+    def compute_required_blocks(self, runtime_prompt_len: int, max_new_tokens: int) -> int:
+        total_tokens = runtime_prompt_len + max_new_tokens
         if total_tokens <= 0:
             return 0
         return math.ceil(total_tokens / self.block_size)
@@ -80,6 +64,19 @@ class MiniScheduler:
         self.reserved_blocks_total -= seq.reserved_blocks
         seq.finish(reason)
         self.finished[seq.seq_id] = seq
+
+    def finish_sequences(
+        self,
+        seqs: list[Sequence],
+        reason: str,
+    ) -> list[Sequence]:
+        finished: list[Sequence] = []
+        for seq in seqs:
+            if seq.seq_id not in self.running:
+                continue
+            self._finish_sequence(seq, reason)
+            finished.append(seq)
+        return finished
 
     def _should_finish(self, seq: Sequence, eos_token_id: int) -> str | None:
         if seq.next_token_id is not None and seq.next_token_id == eos_token_id:
