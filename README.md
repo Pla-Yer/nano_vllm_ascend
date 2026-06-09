@@ -16,6 +16,15 @@ pip install -e .
 python examples/generate.py --model-path /home/player/models/Qwen3/Qwen/Qwen3-0___6B/ --prompt "Hello" --prompt "Explain KV cache" --warm
 ```
 
+## Benchmark
+
+```powershell
+python examples/bench.py --model-path /home/player/models/Qwen3/Qwen/Qwen3-0___6B/ --batch-size 1 --max-new-tokens 128 --iters 5 --output-json bench_outputs/baseline.json
+```
+
+Use `examples/bench.py` as the baseline script for NPU layer optimization. It
+reports prepare, prefill, decode, total latency, token throughput, and peak HBM.
+
 ## Python API
 
 ```python

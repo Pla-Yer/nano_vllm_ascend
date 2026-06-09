@@ -124,6 +124,7 @@ If `pytest`, `torch`, and the Ascend runtime are installed:
 ```powershell
 python -m pytest
 python examples/generate.py --model-path <model> --prompt "Hello" --warm
+python examples/bench.py --model-path <model> --batch-size 1 --max-new-tokens 128 --iters 5 --output-json bench_outputs/baseline.json
 python examples/bench_prefix_cache_speedup.py --model-path <model> --prefill-only
 ```
 
@@ -133,6 +134,8 @@ boundary clearly instead of implying runtime validation.
 
 ## Files That Are Mostly Diagnostic
 
+- `examples/bench.py` is the baseline inference performance script for NPU
+  layer optimization. Keep its metrics stable across layer changes.
 - `examples/bench_prefix_cache_speedup.py` is for route and timing diagnosis.
   Keep route reporting explicit.
 - `examples/check_prefix_cache_equivalence.py` is for comparing cache-hit output
