@@ -61,9 +61,10 @@ class LLM:
         model_path: str,
         max_model_len: int = 2048,
         block_size: int = 128,
-        num_blocks: int = 12,
+        num_blocks: int | None = None,
         max_num_seqs: int = 4,
         device_id: int = 0,
+        npu_memory_utilization: float = 0.8,
         enable_prefix_cache: bool = False,
     ):
         from .model_runner import ModelRunner
@@ -74,21 +75,15 @@ class LLM:
             num_blocks=num_blocks,
             block_size=block_size,
             device_id=device_id,
+            npu_memory_utilization=npu_memory_utilization,
             enable_prefix_cache=enable_prefix_cache,
         )
         self.scheduler = MiniScheduler(
             max_num_seqs=max_num_seqs,
             block_size=block_size,
-            total_num_blocks=num_blocks,
+            total_num_blocks=self.runner.num_blocks,
         )
         self.engine_core = EngineCore(self.runner, self.scheduler)
-
-    def _get_engine_core(self) -> EngineCore:
-        engine_core = getattr(self, "engine_core", None)
-        if engine_core is None:
-            engine_core = EngineCore(self.runner, self.scheduler)
-            self.engine_core = engine_core
-        return engine_core
 
     def _resolve_sampling_params(
         self,
@@ -182,7 +177,7 @@ class LLM:
 
     def step(self) -> list[dict[str, object]]:
         eos_token_id = int(self.runner.tokenizer.eos_token_id)
-        finished = self._get_engine_core().step(eos_token_id)
+        finished = self.engine_core.step(eos_token_id)
         return [
             {
                 "request_id": seq.seq_id,
@@ -200,3 +195,15 @@ class LLM:
 
     def clear_prefix_cache(self) -> None:
         self.runner.clear_prefix_cache()
+
+    def warm(
+        self,
+        prompt: str = "warm",
+        max_new_tokens: int = 1,
+        sampling_params: SamplingParams | None = None,
+    ) -> None:
+        self.generate(
+            [prompt],
+            max_new_tokens=max_new_tokens,
+            sampling_params=sampling_params,
+        )

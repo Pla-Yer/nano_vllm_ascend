@@ -193,6 +193,7 @@ def run_real_demo(args):
         num_blocks=args.num_blocks,
         max_num_seqs=args.max_num_seqs,
         device_id=args.device_id,
+        npu_memory_utilization=args.npu_memory_utilization,
         enable_prefix_cache=args.enable_prefix_cache,
     )
     sampling_params = SamplingParams(
@@ -229,7 +230,7 @@ def run_real_demo(args):
     print(f"\nsubmit second request_id={second_id} while first is running")
     print(f"second_reserved_blocks={llm.scheduler.seqs[second_id].reserved_blocks}")
     print(f"max_num_seqs={args.max_num_seqs}")
-    print(f"num_blocks={args.num_blocks}")
+    print(f"num_blocks={llm.runner.num_blocks}")
     print(f"state={scheduler_state(llm)}")
 
     step_id = args.second_submit_after_steps + 1
@@ -262,7 +263,8 @@ def parse_args():
     parser.add_argument("--second-max-new-tokens", type=int, default=128)
     parser.add_argument("--max-model-len", type=int, default=2048)
     parser.add_argument("--block-size", type=int, default=128)
-    parser.add_argument("--num-blocks", type=int, default=12)
+    parser.add_argument("--num-blocks", type=int)
+    parser.add_argument("--npu-memory-utilization", type=float, default=0.8)
     parser.add_argument("--max-num-seqs", type=int, default=2)
     parser.add_argument("--second-submit-after-steps", type=int, default=10)
     parser.add_argument("--device-id", type=int, default=0)

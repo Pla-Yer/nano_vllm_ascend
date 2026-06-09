@@ -52,14 +52,7 @@ class BlockManager:
         self.seq_lens: dict[int, int] = {}
 
     def _as_token_tuple(self, token_ids, start: int, end: int) -> tuple[int, ...]:
-        chunk = token_ids[start:end]
-        if hasattr(chunk, "tolist"):
-            values = chunk.tolist()
-        elif hasattr(token_ids, "values"):
-            values = token_ids.values[start:end]
-        else:
-            values = list(chunk)
-        return tuple(int(value) for value in values)
+        return tuple(int(value) for value in token_ids[start:end].tolist())
 
     def _make_block_hash(
         self,
@@ -72,19 +65,11 @@ class BlockManager:
         return (parent_hash, self._as_token_tuple(token_ids, start, end))
 
     def _remove_from_free_queue(self, block_id: int) -> None:
-        try:
-            self.free_block_ids.remove(block_id)
-        except ValueError:
-            pass
+        self.free_block_ids.remove(block_id)
 
     def _pop_cached_block(self, block_hash: BlockHash, block_id: int) -> None:
-        block_ids = self.cached_block_hash_to_ids.get(block_hash)
-        if block_ids is None:
-            return
-        try:
-            block_ids.remove(block_id)
-        except ValueError:
-            return
+        block_ids = self.cached_block_hash_to_ids[block_hash]
+        block_ids.remove(block_id)
         if not block_ids:
             self.cached_block_hash_to_ids.pop(block_hash, None)
 
@@ -130,7 +115,7 @@ class BlockManager:
         self,
         slot: int,
         start_pos: int,
-        prefix_block_ids: list[int] | None,
+        prefix_block_ids: list[int],
     ) -> None:
         if slot in self.block_tables:
             return
@@ -142,10 +127,6 @@ class BlockManager:
         self.seq_lens[slot] = start_pos
 
     def ensure_blocks(self, slot: int, end_pos: int) -> None:
-        if slot not in self.block_tables:
-            self.block_tables[slot] = []
-            self.seq_lens[slot] = 0
-
         table = self.block_tables[slot]
         required_blocks = self._num_required_blocks(end_pos)
 
@@ -202,16 +183,6 @@ class BlockManager:
         self.seq_lens.pop(slot, None)
         for block_id in reversed(table):
             self._release_block(block_id)
-
-    def reset(self) -> None:
-        if self.block_tables:
-            raise RuntimeError("cannot reset BlockManager with active slots")
-        self.free_block_ids = list(range(self.num_blocks))
-        self.cached_block_hash_to_ids.clear()
-        self.seq_lens.clear()
-        for block in self.blocks:
-            block.ref_count = 0
-            block.block_hash = None
 
     def clear_prefix_cache(self) -> None:
         if self.block_tables or any(block.ref_count > 0 for block in self.blocks):
@@ -282,14 +253,9 @@ class BlockManager:
         self,
         slots: list[int],
         seq_lens: list[int],
-        start_positions: list[int] | None = None,
-        prefix_block_ids: list[list[int]] | None = None,
+        start_positions: list[int],
+        prefix_block_ids: list[list[int]],
     ) -> PagedKVCacheMetadata:
-        if start_positions is None:
-            start_positions = [0] * len(slots)
-        if prefix_block_ids is None:
-            prefix_block_ids = [[] for _ in slots]
-
         if not (
             len(slots)
             == len(seq_lens)
@@ -339,7 +305,7 @@ class BlockManager:
         self,
         slots: list[int],
         start_positions: list[int],
-        q_len: int = 1,
+        q_len: int,
     ) -> PagedKVCacheMetadata:
         if len(slots) != len(start_positions):
             raise ValueError("slots and start_positions length mismatch")

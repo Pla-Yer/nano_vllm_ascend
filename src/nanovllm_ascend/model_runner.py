@@ -16,9 +16,10 @@ class ModelRunner:
         self,
         model_path: str,
         max_model_len: int,
-        num_blocks: int,
+        num_blocks: int | None,
         block_size: int,
         device_id: int,
+        npu_memory_utilization: float,
         enable_prefix_cache: bool = False,
     ):
         torch.npu.set_device(device_id)
@@ -45,7 +46,9 @@ class ModelRunner:
         self.config.nanovllm_max_model_len = max_model_len
 
         self.model = self._load_model()
-        self.num_blocks = num_blocks  # should be tuned based on NPU memory and model size
+        self.num_blocks = num_blocks or self._num_blocks_from_memory(
+            npu_memory_utilization
+        )
 
         self.block_manager = BlockManager(
             num_blocks=self.num_blocks,
@@ -62,6 +65,7 @@ class ModelRunner:
             dtype=self.dtype,
             device=self.device,
         )
+
     @torch.inference_mode()
     def _load_model(self) -> Qwen3ForCausalLM:
         hf_model = AutoModelForCausalLM.from_pretrained(
@@ -90,25 +94,30 @@ class ModelRunner:
         del hf_model
         return model
 
+    def _num_blocks_from_memory(self, npu_memory_utilization: float) -> int:
+        free_memory, total_memory = torch.npu.mem_get_info()
+        used_memory = total_memory - free_memory
+        kv_cache_budget = int(total_memory * npu_memory_utilization) - used_memory
+        bytes_per_block = (
+            2
+            * self.config.num_hidden_layers
+            * self.block_size
+            * self.config.num_key_value_heads
+            * self.config.head_dim
+            * torch.tensor([], dtype=self.dtype).element_size()
+        )
+        return kv_cache_budget // bytes_per_block
+
     def _tokenize_prompt(self, prompt: str) -> torch.Tensor:
         messages = [{"role": "user", "content": prompt}]
-        try:
-            inputs = self.tokenizer.apply_chat_template(
-                messages,
-                add_generation_prompt=True,
-                enable_thinking=False,
-                tokenize=True,
-                return_dict=True,
-                return_tensors="pt",
-            )
-        except TypeError:
-            inputs = self.tokenizer.apply_chat_template(
-                messages,
-                add_generation_prompt=True,
-                tokenize=True,
-                return_dict=True,
-                return_tensors="pt",
-            )
+        inputs = self.tokenizer.apply_chat_template(
+            messages,
+            add_generation_prompt=True,
+            enable_thinking=False,
+            tokenize=True,
+            return_dict=True,
+            return_tensors="pt",
+        )
         return inputs["input_ids"][0]
 
     def tokenize_prompts(self, prompts: list[str]) -> list[torch.Tensor]:

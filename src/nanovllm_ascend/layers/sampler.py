@@ -46,7 +46,3 @@ class Sampler:
             src=sorted_logits.masked_fill(sorted_mask, float("-inf")),
         )
         return filtered_logits
-
-
-def sample_tokens(logits: torch.Tensor, sampling_params: SamplingParams) -> torch.Tensor:
-    return Sampler().sample(logits, sampling_params)

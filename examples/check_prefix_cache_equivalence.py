@@ -14,6 +14,8 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from nanovllm_ascend import LLM, SamplingParams
 
+from prefix_cache_inputs import build_shared_prefix, count_tokens
+
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -21,6 +23,8 @@ def parse_args():
     parser.add_argument("--max-new-tokens", type=int, default=64)
     parser.add_argument("--max-model-len", type=int, default=2048)
     parser.add_argument("--block-size", type=int, default=128)
+    parser.add_argument("--num-blocks", type=int)
+    parser.add_argument("--npu-memory-utilization", type=float, default=0.8)
     parser.add_argument("--device-id", type=int, default=0)
     parser.add_argument("--shared-prefix-min-tokens", type=int, default=466)
 
@@ -32,48 +36,11 @@ def parse_args():
 
 def cleanup():
     gc.collect()
-    if hasattr(torch, "npu"):
-        try:
-            torch.npu.empty_cache()
-        except Exception:
-            pass
-
-
-def count_tokens(tokenizer, text: str) -> int:
-    return len(tokenizer.encode(text, add_special_tokens=False))
-
-
-def build_long_shared_prefix(tokenizer, min_tokens: int) -> str:
-    header = (
-        "You are a technical assistant specializing in large language model inference systems, "
-        "KV cache management, paged attention, prefix cache, continuous batching, decode scheduling, "
-        "block tables, and NPU acceleration.\n\n"
-        "The following context is shared by multiple requests. It is intentionally long so that "
-        "prefix cache can reuse several complete cache blocks. The content below must remain exactly "
-        "the same for all cache-hit prompts.\n\n"
-    )
-
-    paragraph = (
-        "Prefix cache stores the key and value tensors of a previously processed prompt prefix. "
-        "When another request starts with exactly the same token prefix, the inference engine can skip "
-        "recomputing those prefix tokens during prefill. Instead, it reuses the cached KV blocks and only "
-        "computes the remaining suffix tokens. Correct prefix cache implementation requires exact token "
-        "matching, block-aligned cache reuse, valid block tables, correct context lengths, correct position ids, "
-        "and a causal attention mask that works when query length is smaller than key-value length. "
-        "In paged attention, cached prefix blocks and newly allocated suffix blocks are connected through "
-        "the block table, so the attention backend can see the complete logical sequence. During decode, "
-        "newly generated tokens must be appended to the correct physical block with the correct offset.\n\n"
-    )
-
-    prefix = header
-    while count_tokens(tokenizer, prefix) < min_tokens:
-        prefix += paragraph
-
-    return prefix
+    torch.npu.empty_cache()
 
 
 def build_prompts(tokenizer, min_prefix_tokens: int):
-    shared_prefix = build_long_shared_prefix(tokenizer, min_prefix_tokens)
+    shared_prefix = build_shared_prefix(tokenizer, min_prefix_tokens)
 
     warm_prompt = (
         shared_prefix
@@ -103,8 +70,11 @@ def run_batch_no_cache(args, prompts, sampling_params):
         model_path=args.model_path,
         max_model_len=args.max_model_len,
         block_size=args.block_size,
+        num_blocks=args.num_blocks,
         device_id=args.device_id,
+        npu_memory_utilization=args.npu_memory_utilization,
     )
+    print(f"num_blocks={llm.runner.num_blocks}")
 
     t0 = time.time()
     outputs = llm.generate(
@@ -135,21 +105,18 @@ def run_batch_cache_hit(args, warm_prompt, prompts, sampling_params):
         model_path=args.model_path,
         max_model_len=args.max_model_len,
         block_size=args.block_size,
+        num_blocks=args.num_blocks,
         device_id=args.device_id,
+        npu_memory_utilization=args.npu_memory_utilization,
     )
+    print(f"num_blocks={llm.runner.num_blocks}")
 
     print("\nWarming prefix cache...")
     t0 = time.time()
-    warm_outputs = llm.generate(
-        [warm_prompt],
-        max_new_tokens=8,
-        sampling_params=sampling_params,
-    )
+    llm.warm(warm_prompt, max_new_tokens=8, sampling_params=sampling_params)
     warm_dt = time.time() - t0
 
     print(f"warm_time={warm_dt:.2f}s")
-    print(f"warm_generated_tokens={len(warm_outputs[0]['token_ids'])}")
-    print(f"warm_text={warm_outputs[0]['texts']}")
 
     print("\nRunning batch after warm-up...")
     t1 = time.time()

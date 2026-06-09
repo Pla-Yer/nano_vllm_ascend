@@ -89,7 +89,7 @@ class Qwen3Attention(nn.Module):
         )
 
         if is_prefill:
-            kv_cache.write_prefill(
+            kv_cache.write(
                 layer_idx=self.layer_idx,
                 key_states=key_states,
                 value_states=value_states,
@@ -107,7 +107,7 @@ class Qwen3Attention(nn.Module):
                 value_cache=value_cache_layer,
             )
         else:
-            kv_cache.write_decode(
+            kv_cache.write(
                 layer_idx=self.layer_idx,
                 key_states=key_states,
                 value_states=value_states,

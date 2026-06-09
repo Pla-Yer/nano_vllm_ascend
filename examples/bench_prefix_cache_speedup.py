@@ -16,13 +16,16 @@ sys.path.insert(0, str(ROOT / "src"))
 from nanovllm_ascend import LLM, SamplingParams
 from nanovllm_ascend.sequence import Sequence
 
+from prefix_cache_inputs import build_shared_prefix
+
 
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model-path", required=True)
     parser.add_argument("--max-model-len", type=int, default=2048)
     parser.add_argument("--block-size", type=int, default=128)
-    parser.add_argument("--num-blocks", type=int, default=128)
+    parser.add_argument("--num-blocks", type=int)
+    parser.add_argument("--npu-memory-utilization", type=float, default=0.8)
     parser.add_argument("--max-num-seqs", type=int, default=None)
     parser.add_argument("--device-id", type=int, default=0)
 
@@ -55,29 +58,18 @@ def make_llm(args, *, enable_prefix_cache: bool) -> LLM:
         num_blocks=args.num_blocks,
         max_num_seqs=resolved_max_num_seqs(args),
         device_id=args.device_id,
+        npu_memory_utilization=args.npu_memory_utilization,
         enable_prefix_cache=enable_prefix_cache,
     )
 
 
 def sync_npu():
-    if hasattr(torch, "npu"):
-        try:
-            torch.npu.synchronize()
-        except Exception:
-            pass
+    torch.npu.synchronize()
 
 
 def cleanup():
     gc.collect()
-    if hasattr(torch, "npu"):
-        try:
-            torch.npu.empty_cache()
-        except Exception:
-            pass
-
-
-def count_tokens(tokenizer, text: str) -> int:
-    return len(tokenizer.encode(text, add_special_tokens=False))
+    torch.npu.empty_cache()
 
 
 def stat(xs: list[float]) -> dict[str, float]:
@@ -97,38 +89,6 @@ def stat(xs: list[float]) -> dict[str, float]:
         "p50": percentile(0.50),
         "p90": percentile(0.90),
     }
-
-
-def build_shared_prefix(tokenizer, min_tokens: int, case_id: str) -> str:
-    header = (
-        f"CASE_ID: {case_id}\n\n"
-        "You are a technical assistant specializing in large language model inference systems, "
-        "KV cache management, paged attention, prefix cache, continuous batching, decode scheduling, "
-        "block tables, and NPU acceleration.\n\n"
-        "The following context is shared by multiple requests. It is intentionally long so that "
-        "prefix cache can reuse several complete cache blocks. The content below must remain exactly "
-        "the same for the warm request and the cache-hit request.\n\n"
-    )
-
-    paragraph = (
-        "Prefix cache stores the key and value tensors of a previously processed prompt prefix. "
-        "When another request starts with exactly the same token prefix, the inference engine can skip "
-        "recomputing those prefix tokens during prefill. Instead, it reuses the cached KV blocks and only "
-        "computes the remaining suffix tokens. Correct prefix cache implementation requires exact token "
-        "matching, block-aligned cache reuse, valid block tables, correct context lengths, correct position ids, "
-        "and a causal attention mask that works when query length is smaller than key-value length. "
-        "In paged attention, cached prefix blocks and newly allocated suffix blocks are connected through "
-        "the block table, so the attention backend can see the complete logical sequence. During decode, "
-        "newly generated tokens must be appended to the correct physical block with the correct offset. "
-        "Prefix cache is most useful when the shared prefix is long and the generated continuation is short, "
-        "because the optimization mainly reduces prefill cost rather than decode cost.\n\n"
-    )
-
-    prefix = header
-    while count_tokens(tokenizer, prefix) < min_tokens:
-        prefix += paragraph
-
-    return prefix
 
 
 def build_batch_cases(tokenizer, min_prefix_tokens: int, iter_id: int, batch_size: int):
@@ -264,6 +224,7 @@ def engine_warmup(llm, sampling_params):
 def run_no_cache_bench(args, tokenizer, sampling_params):
     print("\n===== no-cache bench =====")
     llm = make_llm(args, enable_prefix_cache=False)
+    print(f"num_blocks={llm.runner.num_blocks}")
     engine_warmup(llm, sampling_params)
 
     times = []
@@ -311,6 +272,7 @@ def run_no_cache_bench(args, tokenizer, sampling_params):
 def run_cache_hit_bench(args, tokenizer, sampling_params):
     print("\n===== cache-hit bench =====")
     llm = make_llm(args, enable_prefix_cache=True)
+    print(f"num_blocks={llm.runner.num_blocks}")
     engine_warmup(llm, sampling_params)
 
     warm_times = []
@@ -386,6 +348,7 @@ def run_cache_hit_bench(args, tokenizer, sampling_params):
 def run_no_cache_prefill_bench(args, tokenizer, sampling_params):
     print("\n===== no-cache prefill-only bench =====")
     llm = make_llm(args, enable_prefix_cache=False)
+    print(f"num_blocks={llm.runner.num_blocks}")
     engine_warmup(llm, sampling_params)
 
     rows = []
@@ -421,6 +384,7 @@ def run_no_cache_prefill_bench(args, tokenizer, sampling_params):
 def run_cache_hit_prefill_bench(args, tokenizer, sampling_params):
     print("\n===== cache-hit prefill-only bench =====")
     llm = make_llm(args, enable_prefix_cache=True)
+    print(f"num_blocks={llm.runner.num_blocks}")
     engine_warmup(llm, sampling_params)
 
     rows = []
@@ -522,7 +486,8 @@ def main():
     print("Prefix cache speedup benchmark")
     print(f"model_path={args.model_path}")
     print(f"block_size={args.block_size}")
-    print(f"num_blocks={args.num_blocks}")
+    print(f"num_blocks={args.num_blocks or 'auto'}")
+    print(f"npu_memory_utilization={args.npu_memory_utilization}")
     print(f"max_num_seqs={resolved_max_num_seqs(args)}")
     print(f"batch_size={args.batch_size}")
     print(f"iters={args.iters}")

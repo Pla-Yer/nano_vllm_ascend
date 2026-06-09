@@ -13,7 +13,7 @@ A simaple nano vllm for Ascend NPU
 
 ```powershell
 pip install -e .
-python examples/generate.py --model-path /home/player/models/Qwen3/Qwen/Qwen3-0___6B/ --prompt "Hello" --prompt "Explain KV cache"
+python examples/generate.py --model-path /home/player/models/Qwen3/Qwen/Qwen3-0___6B/ --prompt "Hello" --prompt "Explain KV cache" --warm
 ```
 
 ## Python API
@@ -22,6 +22,7 @@ python examples/generate.py --model-path /home/player/models/Qwen3/Qwen/Qwen3-0_
 from nanovllm_ascend import LLM, SamplingParams
 
 llm = LLM("/home/player/models/Qwen3/Qwen/Qwen3-0___6B/")
+llm.warm()
 texts = llm.generate(["Hello", "Explain KV cache"], max_new_tokens=128)
 sampled = llm.generate(
     ["Write a short slogan"],
@@ -29,3 +30,6 @@ sampled = llm.generate(
     sampling_params=SamplingParams(temperature=0.8, top_k=20, top_p=0.9),
 )
 ```
+
+`LLM` computes KV cache blocks from `npu_memory_utilization=0.8` by default.
+Pass `num_blocks` to override the automatic KV cache size.

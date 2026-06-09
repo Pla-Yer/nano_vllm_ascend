@@ -9,7 +9,6 @@ __all__ = [
     "RotaryEmbedding",
     "apply_rotary_pos_emb_tnd",
     "Sampler",
-    "sample_tokens",
 ]
 
 
@@ -45,11 +44,8 @@ def __getattr__(name: str):
             "RotaryEmbedding": RotaryEmbedding,
             "apply_rotary_pos_emb_tnd": apply_rotary_pos_emb_tnd,
         }[name]
-    if name in {"Sampler", "sample_tokens"}:
-        from .sampler import Sampler, sample_tokens
+    if name == "Sampler":
+        from .sampler import Sampler
 
-        return {
-            "Sampler": Sampler,
-            "sample_tokens": sample_tokens,
-        }[name]
+        return Sampler
     raise AttributeError(name)

@@ -264,10 +264,13 @@ def parse_args():
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--max-model-len", type=int, default=512)
     parser.add_argument("--block-size", type=int, default=128)
-    parser.add_argument("--num-blocks", type=int, default=12)
+    parser.add_argument("--num-blocks", type=int)
+    parser.add_argument("--npu-memory-utilization", type=float, default=0.8)
     parser.add_argument("--max-num-seqs", type=int, default=4)
     parser.add_argument("--device-id", type=int, default=0)
     parser.add_argument("--enable-prefix-cache", action="store_true")
+    parser.add_argument("--warm", action="store_true")
+    parser.add_argument("--warm-prompt", default="warm")
     return parser.parse_args()
 
 
@@ -282,8 +285,12 @@ def main() -> None:
         num_blocks=args.num_blocks,
         max_num_seqs=args.max_num_seqs,
         device_id=args.device_id,
+        npu_memory_utilization=args.npu_memory_utilization,
         enable_prefix_cache=args.enable_prefix_cache,
     )
+    print(f"KV cache blocks: {llm.runner.num_blocks}")
+    if args.warm:
+        llm.warm(args.warm_prompt)
     service = OpenAIChatService(llm=llm, model_name=args.model_name)
     app = create_app(service)
     uvicorn.run(app, host=args.host, port=args.port)
