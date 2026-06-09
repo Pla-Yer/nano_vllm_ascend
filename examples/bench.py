@@ -75,7 +75,12 @@ def timed_run(
     max_new_tokens: int,
     sampling_params: SamplingParams,
 ) -> dict[str, float | int]:
+    import torch
+
     llm.scheduler.reset()
+    sync_npu()
+    baseline_allocated_gb = torch.npu.memory_allocated() / 1024**3
+    torch.npu.reset_peak_memory_stats()
 
     prepare_t0 = time.perf_counter()
     request_ids = [
@@ -113,6 +118,8 @@ def timed_run(
     )
     decode_tokens = max(output_tokens - len(prompts), 0)
     total_s = prefill_s + decode_s
+    peak_allocated_gb = torch.npu.max_memory_allocated() / 1024**3
+    peak_incremental_gb = peak_allocated_gb - baseline_allocated_gb
 
     return {
         "prepare_s": prepare_s,
@@ -126,6 +133,9 @@ def timed_run(
         "decode_tok_s": decode_tokens / decode_s if decode_tokens else 0.0,
         "output_tok_s": output_tokens / total_s,
         "total_tok_s": (prompt_tokens + output_tokens) / total_s,
+        "baseline_allocated_gb": baseline_allocated_gb,
+        "peak_allocated_gb": peak_allocated_gb,
+        "peak_incremental_gb": peak_incremental_gb,
     }
 
 
@@ -139,6 +149,9 @@ def make_summary(rows: list[dict[str, float | int]]) -> dict[str, dict[str, floa
         "decode_tok_s",
         "output_tok_s",
         "total_tok_s",
+        "baseline_allocated_gb",
+        "peak_allocated_gb",
+        "peak_incremental_gb",
     ]
     return {key: stat([float(row[key]) for row in rows]) for key in keys}
 
@@ -155,7 +168,10 @@ def print_row(iter_id: int, row: dict[str, float | int]) -> None:
         f"prefill_tok/s={row['prefill_tok_s']:.2f} "
         f"decode_tok/s={row['decode_tok_s']:.2f} "
         f"output_tok/s={row['output_tok_s']:.2f} "
-        f"total_tok/s={row['total_tok_s']:.2f}"
+        f"total_tok/s={row['total_tok_s']:.2f} "
+        f"baseline_hbm={row['baseline_allocated_gb']:.3f}GB "
+        f"peak_hbm={row['peak_allocated_gb']:.3f}GB "
+        f"peak_hbm_delta={row['peak_incremental_gb']:.3f}GB"
     )
 
 
@@ -195,7 +211,8 @@ def main() -> None:
         enable_prefix_cache=args.enable_prefix_cache,
     )
 
-    torch.npu.reset_peak_memory_stats()
+    sync_npu()
+    model_resident_hbm_gb = torch.npu.memory_allocated() / 1024**3
     print("nanovllm_ascend inference benchmark")
     print(f"model_path={args.model_path}")
     print(f"batch_size={args.batch_size}")
@@ -209,6 +226,7 @@ def main() -> None:
     print(f"prompt_repeat={args.prompt_repeat}")
     print(f"warmup_iters={args.warmup_iters}")
     print(f"iters={args.iters}")
+    print(f"model_resident_hbm_gb={model_resident_hbm_gb:.3f}")
 
     for _ in range(args.warmup_iters):
         timed_run(
@@ -231,8 +249,6 @@ def main() -> None:
 
     summary = make_summary(rows)
     print_summary(summary)
-    peak_hbm_gb = torch.npu.max_memory_allocated() / 1024**3
-    print(f"peak_hbm_gb={peak_hbm_gb:.3f}")
 
     result = {
         "config": {
@@ -248,7 +264,7 @@ def main() -> None:
             "prompt_repeat": args.prompt_repeat,
             "warmup_iters": args.warmup_iters,
             "iters": args.iters,
-            "peak_hbm_gb": peak_hbm_gb,
+            "model_resident_hbm_gb": model_resident_hbm_gb,
         },
         "summary": summary,
         "iterations": rows,
