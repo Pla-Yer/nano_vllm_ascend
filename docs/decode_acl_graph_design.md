@@ -22,7 +22,7 @@
 本阶段目标不是实现完整 vLLM-Ascend graph 系统，而是实现一个适合本项目边界的 v1：
 
 - 只做 decode graph
-- 默认关闭，通过 `enable_decode_graph=True` 显式启用
+- 通过 `enable_decode_graph=True` 显式启用
 - prefill、prefix-cache prefill、chunked prefill、mixed prefill/decode 不进入 graph
 - 不引入 `torch.compile`、Npugraph_EX、piecewise graph 或 vLLM 全套 forward context
 - 保持当前 `_npu_paged_attention` decode 后端，不切换 attention backend

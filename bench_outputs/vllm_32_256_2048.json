@@ -1,0 +1,46 @@
+{
+  "backend": "vllm",
+  "model_path": "/home/test/huggingface/Qwen3-0.6B/qwen/Qwen3-0.6B",
+  "num_prompts": 32,
+  "max_model_len": 4096,
+  "max_num_seqs": 32,
+  "max_num_batched_tokens": null,
+  "block_size": 128,
+  "seed": 0,
+  "temperature": 0.0,
+  "top_p": 1.0,
+  "top_k": 0,
+  "ignore_eos": false,
+  "warmup_iters": 1,
+  "profile_iters": 1,
+  "elapsed_s": 28.961387279909104,
+  "total_input_tokens": 8192,
+  "requested_output_tokens": 65536,
+  "total_output_tokens": 65536,
+  "total_tokens": 73728,
+  "request_throughput_req_s": 1.1049194463898773,
+  "output_throughput_tok_s": 2262.8750262064686,
+  "total_throughput_tok_s": 2545.734404482277,
+  "avg_input_len": 256,
+  "avg_requested_output_len": 2048,
+  "avg_actual_output_len": 2048,
+  "actual_output_len_p50": 2048.0,
+  "actual_output_len_p90": 2048.0,
+  "actual_output_len_min": 2048,
+  "actual_output_len_max": 2048,
+  "dataset": {
+    "vocab_size": 151936,
+    "token_id_high_used": 10000,
+    "input_lens_min": 256,
+    "input_lens_max": 256,
+    "output_lens_min": 2048,
+    "output_lens_max": 2048
+  },
+  "memory": {
+    "cuda_peak_allocated_gb": 0.0,
+    "cuda_peak_reserved_gb": 0.0,
+    "npu_peak_allocated_gb": null,
+    "npu_peak_reserved_gb": null
+  }
+}
+
