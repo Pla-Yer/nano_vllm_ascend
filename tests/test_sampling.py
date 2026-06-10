@@ -63,9 +63,7 @@ def test_generate_sampling_params_overrides():
     llm = object.__new__(LLM)
     resolved = llm._resolve_sampling_params(
         SamplingParams(temperature=0.8, top_k=5, top_p=0.9),
-        temperature=None,
-        top_k=10,
-        top_p=None,
+        temperature=None, top_k=10, top_p=None,
     )
     assert resolved.temperature == 0.8
     assert resolved.top_k == 10
@@ -74,10 +72,5 @@ def test_generate_sampling_params_overrides():
 
 def test_generate_default_sampling_params_are_greedy():
     llm = object.__new__(LLM)
-    resolved = llm._resolve_sampling_params(
-        None,
-        temperature=None,
-        top_k=None,
-        top_p=None,
-    )
+    resolved = llm._resolve_sampling_params(None)
     assert resolved == SamplingParams()

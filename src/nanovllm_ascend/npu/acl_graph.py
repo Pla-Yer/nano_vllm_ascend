@@ -41,10 +41,6 @@ class DecodeGraphEntry:
     update_stream: Any
     logits: torch.Tensor | None = None
     tasks: list[PagedAttentionGraphTask] = field(default_factory=list)
-    capture_failed: bool = False
-    capture_error: str | None = None
-    replay_count: int = 0
-    update_count: int = 0
 
     def copy_inputs(
         self,
@@ -154,7 +150,6 @@ class DecodeGraphRunner:
         entry.copy_inputs(input_ids, position_ids, attn_metadata)
         self._update_paged_attention_tasks(entry)
         entry.graph.replay()
-        entry.replay_count += 1
         self.stats.replays += 1
         return entry.logits
 
@@ -201,8 +196,6 @@ class DecodeGraphRunner:
             if not entry.tasks:
                 raise RuntimeError("decode graph captured no paged attention tasks")
         except Exception as exc:
-            entry.capture_failed = True
-            entry.capture_error = str(exc)
             self.disabled_batch_sizes.add(batch_size)
             self.stats.capture_failures += 1
             print(f"[decode_graph] disable batch_size={batch_size}: {exc}")
@@ -251,7 +244,6 @@ class DecodeGraphRunner:
                 torch.npu.graph_task_update_end(entry.update_stream)
                 task.event.record(entry.update_stream)
         current_stream.wait_stream(entry.update_stream)
-        entry.update_count += 1
         self.stats.updates += 1
 
     def stats_dict(self) -> dict[str, int]:

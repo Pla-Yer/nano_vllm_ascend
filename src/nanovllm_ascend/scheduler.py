@@ -114,16 +114,3 @@ class MiniScheduler:
                 step.decode_seqs.append(seq)
 
         return step
-
-    def abort_sequences(
-        self,
-        seqs: list[Sequence],
-        reason: str = "aborted_runtime_error",
-    ) -> list[Sequence]:
-        aborted: list[Sequence] = []
-        for seq in seqs:
-            if seq.seq_id not in self.running:
-                continue
-            self._finish_sequence(seq, reason)
-            aborted.append(seq)
-        return aborted

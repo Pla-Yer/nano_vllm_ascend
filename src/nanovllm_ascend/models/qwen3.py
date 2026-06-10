@@ -88,16 +88,17 @@ class Qwen3Attention(nn.Module):
             *position_embeddings,
         )
 
+        kv_cache.write(
+            layer_idx=self.layer_idx,
+            key_states=key_states,
+            value_states=value_states,
+            slot_mapping=attn_metadata.slot_mapping,
+        )
+        key_cache_layer, value_cache_layer = kv_cache.get_physical_cache(
+            layer_idx=self.layer_idx,
+        )
+
         if is_prefill:
-            kv_cache.write(
-                layer_idx=self.layer_idx,
-                key_states=key_states,
-                value_states=value_states,
-                slot_mapping=attn_metadata.slot_mapping,
-            )
-            key_cache_layer, value_cache_layer = kv_cache.get_physical_cache(
-                layer_idx=self.layer_idx
-            )
             attn_output = self.prefill_attn(
                 q=query_states,
                 k=key_states,
@@ -107,13 +108,6 @@ class Qwen3Attention(nn.Module):
                 value_cache=value_cache_layer,
             )
         else:
-            kv_cache.write(
-                layer_idx=self.layer_idx,
-                key_states=key_states,
-                value_states=value_states,
-                slot_mapping=attn_metadata.slot_mapping,
-            )
-            key_cache_layer, value_cache_layer = kv_cache.get_physical_cache(layer_idx=self.layer_idx)
             attn_output = self.paged_attn(
                 q=query_states,
                 key_cache=key_cache_layer,

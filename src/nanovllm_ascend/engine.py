@@ -92,17 +92,9 @@ class LLM:
     def _resolve_sampling_params(
         self,
         sampling_params: SamplingParams | None,
-        *,
-        temperature: float | None,
-        top_k: int | None,
-        top_p: float | None,
+        **overrides: float | int | None,
     ) -> SamplingParams:
-        base = sampling_params or SamplingParams()
-        return base.with_overrides(
-            temperature=temperature,
-            top_k=top_k,
-            top_p=top_p,
-        )
+        return (sampling_params or SamplingParams()).with_overrides(**overrides)
 
     def generate(
         self,
@@ -118,10 +110,7 @@ class LLM:
             return []
 
         resolved_sampling_params = self._resolve_sampling_params(
-            sampling_params,
-            temperature=temperature,
-            top_k=top_k,
-            top_p=top_p,
+            sampling_params, temperature=temperature, top_k=top_k, top_p=top_p,
         )
 
         self.scheduler.reset()
@@ -158,10 +147,7 @@ class LLM:
         top_p: float | None = None,
     ) -> int:
         resolved_sampling_params = self._resolve_sampling_params(
-            sampling_params,
-            temperature=temperature,
-            top_k=top_k,
-            top_p=top_p,
+            sampling_params, temperature=temperature, top_k=top_k, top_p=top_p,
         )
         token_ids = self.runner.tokenize_prompts([prompt])[0]
         seq = Sequence(
