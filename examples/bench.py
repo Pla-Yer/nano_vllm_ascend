@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import statistics
 import sys
 import time
@@ -30,7 +31,7 @@ def parse_args():
     parser.add_argument("--enable-decode-graph", action="store_true")
     parser.add_argument(
         "--decode-graph-batch-sizes",
-        help="Comma-separated exact decode batch sizes to capture. Defaults to 1..max_num_seqs.",
+        help="Comma- or space-separated exact decode batch sizes to capture. Defaults to 1,2,4,8,16.",
     )
     parser.add_argument("--warmup-iters", type=int, default=1)
     parser.add_argument("--iters", type=int, default=5)
@@ -44,7 +45,7 @@ def parse_args():
 def parse_decode_graph_batch_sizes(value: str | None) -> list[int] | None:
     if not value:
         return None
-    return [int(item) for item in value.split(",") if item]
+    return [int(item) for item in re.split(r"[\s,]+", value.strip()) if item]
 
 
 def sync_npu() -> None:
@@ -239,7 +240,7 @@ def main() -> None:
     print(f"npu_memory_utilization={args.npu_memory_utilization}")
     print(f"enable_prefix_cache={args.enable_prefix_cache}")
     print(f"enable_decode_graph={args.enable_decode_graph}")
-    print(f"decode_graph_batch_sizes={args.decode_graph_batch_sizes or 'default'}")
+    print(f"decode_graph_batch_sizes={args.decode_graph_batch_sizes or 'default=[1,2,4,8,16]'}")
     print(f"prompt_repeat={args.prompt_repeat}")
     print(f"warmup_iters={args.warmup_iters}")
     print(f"iters={args.iters}")

@@ -49,6 +49,6 @@ sampled = llm.generate(
 
 `LLM` computes KV cache blocks from `npu_memory_utilization=0.8` by default.
 Pass `num_blocks` to override the automatic KV cache size.
-`enable_decode_graph=True` captures exact decode batch sizes from `1` to
-`max_num_seqs` by default. Pass `decode_graph_batch_sizes=[...]` to restrict
-capture to specific decode batch sizes.
+`enable_decode_graph=True` captures exact decode batch sizes `[1, 2, 4, 8, 16]`
+by default. Pass `decode_graph_batch_sizes=[...]` to restrict capture to
+specific decode batch sizes.

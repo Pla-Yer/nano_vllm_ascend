@@ -234,18 +234,7 @@ class DecodeGraphRunner:
         current_stream = torch.npu.current_stream()
         with torch.npu.stream(entry.update_stream):
             for task in entry.tasks:
-                workspace = torch_npu._npu_paged_attention_get_workspace(
-                    query=task.query,
-                    key_cache=task.key_cache,
-                    value_cache=task.value_cache,
-                    num_kv_heads=task.num_kv_heads,
-                    num_heads=task.num_heads,
-                    scale_value=task.scale,
-                    block_table=task.block_tables,
-                    context_lens=task.context_lens,
-                    out=task.output,
-                )
-                task.workspace = workspace
+                workspace = task.workspace
                 torch.npu.graph_task_update_begin(entry.update_stream, task.handle)
                 torch_npu._npu_paged_attention(
                     query=task.query,

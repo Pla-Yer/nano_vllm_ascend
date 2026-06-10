@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from pathlib import Path
 import time
@@ -25,7 +26,7 @@ def parse_args():
     parser.add_argument("--enable-decode-graph", action="store_true")
     parser.add_argument(
         "--decode-graph-batch-sizes",
-        help="Comma-separated exact decode batch sizes to capture. Defaults to 1..batch size.",
+        help="Comma- or space-separated exact decode batch sizes to capture. Defaults to 1,2,4,8,16.",
     )
     parser.add_argument("--warm", action="store_true")
     parser.add_argument("--warm-prompt", default="warm")
@@ -38,7 +39,7 @@ def parse_args():
 def parse_decode_graph_batch_sizes(value: str | None) -> list[int] | None:
     if not value:
         return None
-    return [int(item) for item in value.split(",") if item]
+    return [int(item) for item in re.split(r"[\s,]+", value.strip()) if item]
 
 
 def main() -> None:
@@ -65,7 +66,7 @@ def main() -> None:
     )
     print(f"KV cache blocks: {llm.runner.num_blocks}")
     if args.enable_decode_graph:
-        print(f"Decode graph batch sizes: {args.decode_graph_batch_sizes or 'default'}")
+        print(f"Decode graph batch sizes: {args.decode_graph_batch_sizes or 'default=[1,2,4,8,16]'}")
 
     if args.warm:
         llm.warm(args.warm_prompt, sampling_params=sampling_params)

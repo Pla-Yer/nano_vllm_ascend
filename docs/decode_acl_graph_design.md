@@ -128,10 +128,11 @@ llm = LLM(
 
 - `enable_decode_graph=False`：默认行为，完全走 eager decode
 - `enable_decode_graph=True`：decode 尝试使用 ACL graph
-- `decode_graph_batch_sizes=None`：默认捕获 `1..max_num_seqs` 的精确 batch size
+- `decode_graph_batch_sizes=None`：默认捕获 `[1, 2, 4, 8, 16]` 这些精确 batch size
 - `decode_graph_batch_sizes=[1, 2]`：只捕获指定 decode batch size
+- CLI 中 `--decode-graph-batch-sizes "1,2,4"` 或 `"1 2 4"` 都会解析为自定义捕获列表
 
-v1 采用精确 batch size capture，不做 padding bucket。原因是当前 runtime 追求最小实现，padding dummy row 会引入额外 slot、KV 写入和采样边界问题。
+v1 采用精确 batch size capture，不做 padding bucket。默认捕获 `[1, 2, 4, 8, 16]` 是为了覆盖常见 serving batch，同时避免为每一个临时 batch size 都捕获 graph。padding dummy row 会引入额外 slot、KV 写入和采样边界问题，因此暂不实现。
 
 ### 4.2 模块划分
 
@@ -234,7 +235,7 @@ capture_failures += 1
 2. copy 当前 position_ids 到静态 position_ids
 3. copy 当前 block_tables / context_lens / slot_mapping 到静态 metadata
 4. 对每层 paged attention task 执行 graph_task_update:
-   - 重新获取 workspace
+   - 复用 capture 阶段保存的 workspace
    - graph_task_update_begin(update_stream, handle)
    - _npu_paged_attention(... 当前 context_lens/workspace ...)
    - graph_task_update_end(update_stream)
@@ -244,6 +245,8 @@ capture_failures += 1
 ```
 
 这里最重要的是第 4 步。它保证 CPU `context_lens` 和 attention workspace 在 replay 前变成当前 decode step 的值。
+
+注意：同一个精确 batch size 的 graph entry 中，`query`、`block_table`、`out` 的 shape 固定，paged attention workspace 也应在 capture 阶段分配并复用。replay 前不应每步重新调用 `_npu_paged_attention_get_workspace()` 分配新 workspace，否则 batch size 变大时容易在 PyTorch reserved memory 已经很高的情况下触发额外 OOM。
 
 ### 4.6 Block table 宽度
 
@@ -347,9 +350,135 @@ capture_failures: 0
 
 因此这次结果证明的不是“代码里有 graph 开关”，而是真实 decode 路径完成了 capture、attention task update 和 replay。
 
+### 5.3 Workspace 复用优化后的结果
+
+在 replay/update 阶段改为复用 capture 阶段保存的 paged attention workspace 后，batch size 1 和 batch size 4 都有新的实测结果。
+
+#### Batch size 1
+
+输出文件：
+
+```text
+bench_outputs/e2e_p4_graph.json
+```
+
+summary：
+
+```text
+prepare_s: avg=0.0011
+prefill_s: avg=0.0393
+decode_s: avg=1.2603
+total_s: avg=1.2996
+prefill_tok_s: avg=789.5777
+decode_tok_s: avg=100.7942
+output_tok_s: avg=98.5161
+total_tok_s: avg=122.3755
+baseline_allocated_gb: avg=49.4625
+peak_allocated_gb: avg=49.5372
+peak_incremental_gb: avg=0.0747
+```
+
+5 次结果：
+
+| iter | prefill_s | decode_s | total_s | decode_tok/s | output_tok/s | total_tok/s |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 0.0372 | 1.2295 | 1.2667 | 103.30 | 101.05 | 125.53 |
+| 2 | 0.0389 | 1.2566 | 1.2955 | 101.07 | 98.80 | 122.73 |
+| 3 | 0.0417 | 1.2818 | 1.3235 | 99.08 | 96.71 | 120.13 |
+| 4 | 0.0391 | 1.2778 | 1.3169 | 99.39 | 97.20 | 120.74 |
+| 5 | 0.0396 | 1.2558 | 1.2954 | 101.13 | 98.81 | 122.75 |
+
+decode graph stats：
+
+```text
+captures: 1
+replays: 762
+updates: 762
+fallbacks: 0
+capture_failures: 0
+```
+
+与首次 graph 结果相比：
+
+```text
+decode_s:       1.5334s -> 1.2603s
+decode_tok/s:   82.82   -> 100.79
+total_tok/s:   101.35   -> 122.38
+peak_delta_gb:   0.0820 -> 0.0747
+```
+
+这说明 workspace 复用不仅降低了 OOM 风险，也减少了 replay/update 阶段的额外开销。
+
+#### Batch size 4
+
+输出文件：
+
+```text
+bench_outputs/e2e_p4_graph_b4.json
+```
+
+summary：
+
+```text
+prepare_s: avg=0.0029
+prefill_s: avg=0.0396
+decode_s: avg=1.3641
+total_s: avg=1.4037
+prefill_tok_s: avg=3128.7640
+decode_tok_s: avg=372.4191
+output_tok_s: avg=364.7497
+total_tok_s: avg=453.0875
+baseline_allocated_gb: avg=49.4640
+peak_allocated_gb: avg=49.5401
+peak_incremental_gb: avg=0.0762
+```
+
+5 次结果：
+
+| iter | prefill_s | decode_s | total_s | decode_tok/s | output_tok/s | total_tok/s |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 0.0408 | 1.3600 | 1.4008 | 373.53 | 365.51 | 454.03 |
+| 2 | 0.0395 | 1.3603 | 1.3998 | 373.45 | 365.77 | 454.35 |
+| 3 | 0.0388 | 1.3761 | 1.4148 | 369.17 | 361.88 | 449.52 |
+| 4 | 0.0400 | 1.3673 | 1.4073 | 371.52 | 363.81 | 451.92 |
+| 5 | 0.0392 | 1.3567 | 1.3959 | 374.43 | 366.78 | 455.61 |
+
+decode graph stats：
+
+```text
+captures: 1
+replays: 762
+updates: 762
+fallbacks: 0
+capture_failures: 0
+```
+
+batch size 4 的关键结论：
+
+- decode throughput 达到 `372.42 tok/s`；
+- total throughput 达到 `453.09 tok/s`；
+- peak incremental HBM 约 `0.0762 GiB`，与 batch size 1 的 graph 增量接近；
+- `fallbacks=0` 和 `capture_failures=0` 说明真实路径没有退回 eager decode。
+
 ---
 
 ## 6. 性能解读
+
+workspace 复用后的最新 headline 是：
+
+```text
+batch size 1:
+  decode_s avg     = 1.2603s
+  decode_tok/s avg = 100.7942
+  total_tok/s avg  = 122.3755
+  peak_delta_gb    = 0.0747
+
+batch size 4:
+  decode_s avg     = 1.3641s
+  decode_tok/s avg = 372.4191
+  total_tok/s avg  = 453.0875
+  peak_delta_gb    = 0.0762
+```
 
 这次 bench 的核心变化是 decode：
 
@@ -358,7 +487,7 @@ decode_s avg = 1.5334s
 decode_tok/s avg = 82.8222
 ```
 
-此前性能记录中 batch size 1 decode 大约在 28 tok/s 到 29 tok/s 附近。graph 后 decode 达到 82 tok/s 以上，说明瓶颈确实包含大量 eager launch / 小算子调度成本。
+此前性能记录中 batch size 1 decode 大约在 28 tok/s 到 29 tok/s 附近。首次 graph 后 decode 达到 82 tok/s 以上；workspace 复用后 batch size 1 进一步达到约 100.8 tok/s，batch size 4 达到约 372.4 tok/s，说明瓶颈确实包含大量 eager launch / 小算子调度成本。
 
 prefill 基本保持独立：
 
@@ -384,7 +513,7 @@ decode graph 引入了静态 input/metadata/output tensor、graph task workspace
 当前实现仍是 v1，不应扩大解释范围：
 
 - 只验证了 decode-only graph
-- 只展示了 batch size 1 的 bench 结果
+- 已展示 batch size 1 和 batch size 4 的 bench 结果，仍需继续覆盖 batch size 2/8/16
 - prefill 没有 graph
 - prefix-cache paged prefill 没有 graph
 - mixed prefill/decode 没有 graph
@@ -393,6 +522,41 @@ decode graph 引入了静态 input/metadata/output tensor、graph task workspace
 - 暂未把 graph stats 写入所有 example / server 输出
 
 另外，`context_lens` 必须保持 CPU 的约束仍然存在。后续如果 torch_npu 接口变化，attention update 逻辑需要重新验证。
+
+### 7.1 Batch size 4 OOM 现象
+
+一次 batch size 4 graph bench 中出现过如下错误：
+
+```text
+RuntimeError: NPU out of memory. Tried to allocate 84.00 MiB
+60.97 GiB total capacity
+54.06 GiB already allocated
+20.31 MiB free
+60.24 GiB reserved in total by PyTorch
+```
+
+这个现象的含义是：
+
+- `84 MiB` 对 paged attention workspace 来说不是离谱大小；
+- 真正的问题是当前运行已经只剩约 `20 MiB` free，任何额外 workspace 都可能失败；
+- `num_blocks=3359` 和 `npu_memory_utilization=0.8` 会让 KV cache 预留较多 HBM；
+- decode graph 还会额外持有 graph、静态 tensor、每层 attention task 和 workspace；
+- replay update 阶段如果重复调用 `_npu_paged_attention_get_workspace()`，会进一步放大 OOM 风险。
+
+因此 batch size 4 及以上建议：
+
+```powershell
+python examples/bench.py `
+  --model-path /home/player/models/Qwen3/Qwen/Qwen3-0___6B/ `
+  --batch-size 4 `
+  --max-num-seqs 4 `
+  --max-new-tokens 128 `
+  --enable-decode-graph `
+  --decode-graph-batch-sizes 4 `
+  --npu-memory-utilization 0.7
+```
+
+如果仍然 OOM，可以继续降低 `--npu-memory-utilization` 或直接传较小 `--num-blocks`。graph bench 阶段建议先只捕获正在测试的 batch size，例如只测 batch 4 就使用 `--decode-graph-batch-sizes 4`，避免默认 `[1, 2, 4, 8, 16]` 在多轮 workload 中捕获更多 graph entry。
 
 ---
 
@@ -433,5 +597,4 @@ decode-only full graph replay
 + eager fallback
 ```
 
-它不是通用 graph 框架，也不是 vLLM-Ascend 的完整复刻。当前实测已经显示该方向有效：generate throughput 从约 22 tok/s 提升到约 42 tok/s；bench 中 batch size 1 的 decode throughput 达到约 82.8 tok/s，并且 graph stats 显示 capture/replay/update 路径全部命中，没有 eager fallback。
-
+它不是通用 graph 框架，也不是 vLLM-Ascend 的完整复刻。当前实测已经显示该方向有效：generate throughput 从约 22 tok/s 提升到约 42 tok/s；workspace 复用后，bench 中 batch size 1 的 decode throughput 达到约 100.8 tok/s，batch size 4 达到约 372.4 tok/s，并且 graph stats 显示 capture/replay/update 路径全部命中，没有 eager fallback。

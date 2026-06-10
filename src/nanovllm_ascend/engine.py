@@ -71,9 +71,6 @@ class LLM:
     ):
         from .model_runner import ModelRunner
 
-        if decode_graph_batch_sizes is None:
-            decode_graph_batch_sizes = list(range(1, max_num_seqs + 1))
-
         self.runner = ModelRunner(
             model_path=model_path,
             max_model_len=max_model_len,

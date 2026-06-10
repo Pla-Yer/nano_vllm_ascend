@@ -12,6 +12,9 @@ from .npu.acl_graph import DecodeGraphRunner
 from .sequence import Sequence
 
 
+DEFAULT_DECODE_GRAPH_BATCH_SIZES = [1, 2, 4, 8, 16]
+
+
 class ModelRunner:
     def __init__(
         self,
@@ -74,7 +77,7 @@ class ModelRunner:
             self.decode_graph_runner = DecodeGraphRunner(
                 model=self.model,
                 kv_cache=self.kv_cache,
-                batch_sizes=decode_graph_batch_sizes or [1],
+                batch_sizes=decode_graph_batch_sizes or DEFAULT_DECODE_GRAPH_BATCH_SIZES,
                 max_model_len=self.max_model_len,
                 block_size=self.block_size,
             )

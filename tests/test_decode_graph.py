@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import sys
 import types
+from pathlib import Path
 
 from nanovllm_ascend.engine import LLM
 
@@ -172,7 +173,7 @@ def test_decode_graph_runner_disables_only_failed_batch_size(monkeypatch):
     assert runner.stats_dict()["fallbacks"] == 1
 
 
-def test_llm_decode_graph_api_defaults_to_scheduler_batch_sizes(monkeypatch):
+def test_llm_decode_graph_api_leaves_default_sizes_to_model_runner(monkeypatch):
     captured = {}
 
     class FakeModelRunner:
@@ -191,4 +192,10 @@ def test_llm_decode_graph_api_defaults_to_scheduler_batch_sizes(monkeypatch):
     )
 
     assert captured["enable_decode_graph"] is True
-    assert captured["decode_graph_batch_sizes"] == [1, 2, 3]
+    assert captured["decode_graph_batch_sizes"] is None
+
+
+def test_model_runner_default_decode_graph_batch_sizes():
+    source = Path("src/nanovllm_ascend/model_runner.py").read_text(encoding="utf-8")
+
+    assert "DEFAULT_DECODE_GRAPH_BATCH_SIZES = [1, 2, 4, 8, 16]" in source
