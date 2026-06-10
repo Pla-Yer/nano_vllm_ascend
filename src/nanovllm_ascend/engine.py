@@ -66,7 +66,7 @@ class LLM:
         device_id: int = 0,
         npu_memory_utilization: float = 0.8,
         enable_prefix_cache: bool = False,
-        enable_decode_graph: bool = False,
+        enable_decode_graph: bool = True,
         decode_graph_batch_sizes: list[int] | None = None,
     ):
         from .model_runner import ModelRunner

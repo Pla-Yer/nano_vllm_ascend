@@ -213,6 +213,7 @@ class Qwen3ForCausalLM(nn.Module):
         kv_cache,
         attn_metadata,
         is_prefill: bool,
+        logits_indices: torch.Tensor | None = None,
     ) -> CausalLMOutput:
         hidden_states = self.model(
             input_ids_flat=input_ids_flat,
@@ -221,4 +222,6 @@ class Qwen3ForCausalLM(nn.Module):
             attn_metadata=attn_metadata,
             is_prefill=is_prefill,
         )
+        if logits_indices is not None:
+            hidden_states = hidden_states.index_select(0, logits_indices)
         return CausalLMOutput(logits=self.lm_head(hidden_states))

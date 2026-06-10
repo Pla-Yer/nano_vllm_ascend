@@ -12,7 +12,7 @@ from .npu.acl_graph import DecodeGraphRunner
 from .sequence import Sequence
 
 
-DEFAULT_DECODE_GRAPH_BATCH_SIZES = [1, 2, 4, 8, 16]
+DEFAULT_DECODE_GRAPH_BATCH_SIZES = [1, 2, 4, 8, 16, 32]
 
 
 class ModelRunner:
@@ -220,10 +220,10 @@ class ModelRunner:
             kv_cache=self.kv_cache,
             attn_metadata=attn_metadata,
             is_prefill=True,
+            logits_indices=last_token_indices,
         )
 
-        last_logits = outputs.logits.index_select(0, last_token_indices)
-        for seq, logits in zip(seqs, last_logits.unbind(0)):
+        for seq, logits in zip(seqs, outputs.logits.unbind(0)):
             next_token = int(self.sampler.sample(logits.unsqueeze(0), seq.sampling_params).item())
             seq.set_prefill_result(
                 next_token_id=next_token,

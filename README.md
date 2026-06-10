@@ -52,3 +52,53 @@ Pass `num_blocks` to override the automatic KV cache size.
 `enable_decode_graph=True` captures exact decode batch sizes `[1, 2, 4, 8, 16]`
 by default. Pass `decode_graph_batch_sizes=[...]` to restrict capture to
 specific decode batch sizes.
+
+## OpenAI-compatible API
+
+Start the server:
+
+```powershell
+python examples/api/start_server.py --model-path /home/player/models/Qwen3/Qwen/Qwen3-0___6B/ --warm
+```
+
+The server exposes `/v1/chat/completions` on port 8000 by default, compatible
+with the OpenAI Chat Completions API format. Pass `--port` to change the port.
+
+### Multi-turn Chat
+
+```powershell
+python examples/api/chat.py
+python examples/api/chat.py --system "你是一个有用的助手" --temperature 0.8
+python examples/api/chat.py --no-stream
+```
+
+The chat client maintains full conversation history across turns. Built-in
+commands: `/clear` to reset conversation, `/history` to view past messages,
+`/quit` to exit.
+
+### HTTP API
+
+Non-streaming request:
+
+```powershell
+curl http://127.0.0.1:8000/v1/chat/completions -H "Content-Type: application/json" -d '{
+  "model": "nanovllm-ascend",
+  "messages": [
+    {"role": "system", "content": "You are a helpful assistant."},
+    {"role": "user", "content": "Hello!"}
+  ],
+  "max_tokens": 128,
+  "temperature": 0.7
+}'
+```
+
+Streaming request (SSE):
+
+```powershell
+curl http://127.0.0.1:8000/v1/chat/completions -H "Content-Type: application/json" -d '{
+  "model": "nanovllm-ascend",
+  "messages": [{"role": "user", "content": "Hello!"}],
+  "max_tokens": 128,
+  "stream": true
+}'
+```
