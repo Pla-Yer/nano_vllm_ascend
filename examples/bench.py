@@ -27,6 +27,11 @@ def parse_args():
     parser.add_argument("--max-num-seqs", type=int)
     parser.add_argument("--device-id", type=int, default=0)
     parser.add_argument("--enable-prefix-cache", action="store_true")
+    parser.add_argument("--enable-decode-graph", action="store_true")
+    parser.add_argument(
+        "--decode-graph-batch-sizes",
+        help="Comma-separated exact decode batch sizes to capture. Defaults to 1..max_num_seqs.",
+    )
     parser.add_argument("--warmup-iters", type=int, default=1)
     parser.add_argument("--iters", type=int, default=5)
     parser.add_argument("--temperature", type=float, default=0.0)
@@ -34,6 +39,12 @@ def parse_args():
     parser.add_argument("--top-p", type=float, default=1.0)
     parser.add_argument("--output-json", type=Path)
     return parser.parse_args()
+
+
+def parse_decode_graph_batch_sizes(value: str | None) -> list[int] | None:
+    if not value:
+        return None
+    return [int(item) for item in value.split(",") if item]
 
 
 def sync_npu() -> None:
@@ -209,6 +220,10 @@ def main() -> None:
         device_id=args.device_id,
         npu_memory_utilization=args.npu_memory_utilization,
         enable_prefix_cache=args.enable_prefix_cache,
+        enable_decode_graph=args.enable_decode_graph,
+        decode_graph_batch_sizes=parse_decode_graph_batch_sizes(
+            args.decode_graph_batch_sizes
+        ),
     )
 
     sync_npu()
@@ -223,6 +238,8 @@ def main() -> None:
     print(f"num_blocks={llm.runner.num_blocks}")
     print(f"npu_memory_utilization={args.npu_memory_utilization}")
     print(f"enable_prefix_cache={args.enable_prefix_cache}")
+    print(f"enable_decode_graph={args.enable_decode_graph}")
+    print(f"decode_graph_batch_sizes={args.decode_graph_batch_sizes or 'default'}")
     print(f"prompt_repeat={args.prompt_repeat}")
     print(f"warmup_iters={args.warmup_iters}")
     print(f"iters={args.iters}")
@@ -249,6 +266,11 @@ def main() -> None:
 
     summary = make_summary(rows)
     print_summary(summary)
+    decode_graph_stats = llm.runner.decode_graph_stats()
+    if decode_graph_stats:
+        print("\n===== decode graph stats =====")
+        for key, value in decode_graph_stats.items():
+            print(f"{key}: {value}")
 
     result = {
         "config": {
@@ -261,6 +283,8 @@ def main() -> None:
             "num_blocks": llm.runner.num_blocks,
             "npu_memory_utilization": args.npu_memory_utilization,
             "enable_prefix_cache": args.enable_prefix_cache,
+            "enable_decode_graph": args.enable_decode_graph,
+            "decode_graph_batch_sizes": args.decode_graph_batch_sizes,
             "prompt_repeat": args.prompt_repeat,
             "warmup_iters": args.warmup_iters,
             "iters": args.iters,
@@ -268,6 +292,7 @@ def main() -> None:
         },
         "summary": summary,
         "iterations": rows,
+        "decode_graph_stats": decode_graph_stats,
     }
     if args.output_json:
         args.output_json.parent.mkdir(parents=True, exist_ok=True)

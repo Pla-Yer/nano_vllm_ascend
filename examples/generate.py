@@ -22,12 +22,23 @@ def parse_args():
     parser.add_argument("--num-blocks", type=int)
     parser.add_argument("--npu-memory-utilization", type=float, default=0.8)
     parser.add_argument("--device-id", type=int, default=0)
+    parser.add_argument("--enable-decode-graph", action="store_true")
+    parser.add_argument(
+        "--decode-graph-batch-sizes",
+        help="Comma-separated exact decode batch sizes to capture. Defaults to 1..batch size.",
+    )
     parser.add_argument("--warm", action="store_true")
     parser.add_argument("--warm-prompt", default="warm")
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--top-k", type=int, default=0)
     parser.add_argument("--top-p", type=float, default=1.0)
     return parser.parse_args()
+
+
+def parse_decode_graph_batch_sizes(value: str | None) -> list[int] | None:
+    if not value:
+        return None
+    return [int(item) for item in value.split(",") if item]
 
 
 def main() -> None:
@@ -40,6 +51,11 @@ def main() -> None:
         num_blocks=args.num_blocks,
         device_id=args.device_id,
         npu_memory_utilization=args.npu_memory_utilization,
+        max_num_seqs=len(args.prompt),
+        enable_decode_graph=args.enable_decode_graph,
+        decode_graph_batch_sizes=parse_decode_graph_batch_sizes(
+            args.decode_graph_batch_sizes
+        ),
     )
 
     sampling_params = SamplingParams(
@@ -48,6 +64,8 @@ def main() -> None:
         top_p=args.top_p,
     )
     print(f"KV cache blocks: {llm.runner.num_blocks}")
+    if args.enable_decode_graph:
+        print(f"Decode graph batch sizes: {args.decode_graph_batch_sizes or 'default'}")
 
     if args.warm:
         llm.warm(args.warm_prompt, sampling_params=sampling_params)
@@ -67,6 +85,8 @@ def main() -> None:
     throughput = sum(len(out['token_ids'])  for out in output) / (time.time() - t)
 
     print(f"Throughput: {throughput:.2f} tokens/s")
+    if args.enable_decode_graph:
+        print(f"Decode graph stats: {llm.runner.decode_graph_stats()}")
 
 if __name__ == "__main__":
     main()

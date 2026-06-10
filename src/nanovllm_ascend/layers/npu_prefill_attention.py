@@ -97,8 +97,8 @@ class NpuBatchPrefillAttention(nn.Module):
         else:
             attn_out, _ = torch_npu.npu_fused_infer_attention_score(
                 query=query,
-                key=k.to(dtype=target_dtype).contiguous(),
-                value=v.contiguous(),
+                key=k,
+                value=v,
                 atten_mask=self.attn_mask,
                 block_table=None,
                 input_layout="TND",

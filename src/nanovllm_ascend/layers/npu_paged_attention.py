@@ -4,6 +4,12 @@ import torch
 import torch_npu
 from torch import nn
 
+from nanovllm_ascend.npu.acl_graph import (
+    PagedAttentionGraphTask,
+    current_decode_graph_entry,
+    record_paged_attention_task,
+)
+
 
 class NpuPagedAttention(nn.Module):
     def __init__(
@@ -30,15 +36,60 @@ class NpuPagedAttention(nn.Module):
         if num_heads != self.num_heads or head_dim != self.head_dim:
             raise ValueError(f"query shape mismatch: got {tuple(q.shape)}")
 
-        query = q.to(dtype=key_cache.dtype).contiguous()
-        block_tables = block_tables.to(device=query.device, dtype=torch.int32).contiguous()
-        context_lens = context_lens.to(device="cpu", dtype=torch.int32).contiguous()
-        output = torch.empty_like(query)
+        output = torch.empty_like(q)
+        entry = current_decode_graph_entry()
+        if entry is not None:
+            workspace = torch_npu._npu_paged_attention_get_workspace(
+                query=q,
+                key_cache=key_cache,
+                value_cache=value_cache,
+                num_kv_heads=self.num_key_value_heads,
+                num_heads=self.num_heads,
+                scale_value=self.scale,
+                block_table=block_tables,
+                context_lens=context_lens,
+                out=output,
+            )
+            stream = torch_npu.npu.current_stream()
+            event = torch.npu.ExternalEvent()
+            event.wait(stream)
+            event.reset(stream)
+            torch.npu.graph_task_group_begin(stream)
+            torch_npu._npu_paged_attention(
+                query=q,
+                key_cache=key_cache,
+                value_cache=value_cache,
+                num_kv_heads=self.num_key_value_heads,
+                num_heads=self.num_heads,
+                scale_value=self.scale,
+                block_table=block_tables,
+                context_lens=context_lens,
+                out=output,
+                workspace=workspace,
+            )
+            handle = torch.npu.graph_task_group_end(stream)
+            record_paged_attention_task(
+                PagedAttentionGraphTask(
+                    query=q,
+                    key_cache=key_cache,
+                    value_cache=value_cache,
+                    num_kv_heads=self.num_key_value_heads,
+                    num_heads=self.num_heads,
+                    scale=self.scale,
+                    block_tables=block_tables,
+                    context_lens=context_lens,
+                    output=output,
+                    workspace=workspace,
+                    handle=handle,
+                    event=event,
+                )
+            )
+            return output
 
         torch_npu._npu_paged_attention(
-            query=query,
-            key_cache=key_cache.contiguous(),
-            value_cache=value_cache.contiguous(),
+            query=q,
+            key_cache=key_cache,
+            value_cache=value_cache,
             num_kv_heads=self.num_key_value_heads,
             num_heads=self.num_heads,
             scale_value=self.scale,

@@ -66,8 +66,13 @@ class LLM:
         device_id: int = 0,
         npu_memory_utilization: float = 0.8,
         enable_prefix_cache: bool = False,
+        enable_decode_graph: bool = False,
+        decode_graph_batch_sizes: list[int] | None = None,
     ):
         from .model_runner import ModelRunner
+
+        if decode_graph_batch_sizes is None:
+            decode_graph_batch_sizes = list(range(1, max_num_seqs + 1))
 
         self.runner = ModelRunner(
             model_path=model_path,
@@ -77,6 +82,8 @@ class LLM:
             device_id=device_id,
             npu_memory_utilization=npu_memory_utilization,
             enable_prefix_cache=enable_prefix_cache,
+            enable_decode_graph=enable_decode_graph,
+            decode_graph_batch_sizes=decode_graph_batch_sizes,
         )
         self.scheduler = MiniScheduler(
             max_num_seqs=max_num_seqs,

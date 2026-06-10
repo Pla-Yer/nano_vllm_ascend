@@ -8,6 +8,7 @@ from .layers import Sampler
 from .models.qwen3 import Qwen3ForCausalLM
 from .npu.paged_kv_cache import PagedKVCache
 from .npu.block_manager import BlockManager
+from .npu.acl_graph import DecodeGraphRunner
 from .sequence import Sequence
 
 
@@ -21,6 +22,8 @@ class ModelRunner:
         device_id: int,
         npu_memory_utilization: float,
         enable_prefix_cache: bool = False,
+        enable_decode_graph: bool = False,
+        decode_graph_batch_sizes: list[int] | None = None,
     ):
         torch.npu.set_device(device_id)
 
@@ -31,6 +34,7 @@ class ModelRunner:
         self.dtype = torch.bfloat16
         self.sampler = Sampler()
         self.enable_prefix_cache = enable_prefix_cache
+        self.enable_decode_graph = enable_decode_graph
 
         self.tokenizer = AutoTokenizer.from_pretrained(
             model_path,
@@ -65,6 +69,15 @@ class ModelRunner:
             dtype=self.dtype,
             device=self.device,
         )
+        self.decode_graph_runner = None
+        if enable_decode_graph:
+            self.decode_graph_runner = DecodeGraphRunner(
+                model=self.model,
+                kv_cache=self.kv_cache,
+                batch_sizes=decode_graph_batch_sizes or [1],
+                max_model_len=self.max_model_len,
+                block_size=self.block_size,
+            )
 
     @torch.inference_mode()
     def _load_model(self) -> Qwen3ForCausalLM:
@@ -247,17 +260,32 @@ class ModelRunner:
             q_len=1,
         )
 
-        outputs = self.model(
-            input_ids_flat=input_ids,
-            position_ids_flat=position_ids,
-            kv_cache=self.kv_cache,
-            attn_metadata=attn_metadata,
-            is_prefill=False,
-        )
+        logits = None
+        if self.decode_graph_runner is not None:
+            logits = self.decode_graph_runner.forward(
+                input_ids=input_ids,
+                position_ids=position_ids,
+                attn_metadata=attn_metadata,
+            )
 
-        for seq, logits in zip(seqs, outputs.logits.unbind(0)):
-            next_token = int(self.sampler.sample(logits.unsqueeze(0), seq.sampling_params).item())
+        if logits is None:
+            outputs = self.model(
+                input_ids_flat=input_ids,
+                position_ids_flat=position_ids,
+                kv_cache=self.kv_cache,
+                attn_metadata=attn_metadata,
+                is_prefill=False,
+            )
+            logits = outputs.logits
+
+        for seq, seq_logits in zip(seqs, logits.unbind(0)):
+            next_token = int(self.sampler.sample(seq_logits.unsqueeze(0), seq.sampling_params).item())
             seq.set_decode_result(next_token)
+
+    def decode_graph_stats(self) -> dict[str, int]:
+        if self.decode_graph_runner is None:
+            return {}
+        return self.decode_graph_runner.stats_dict()
 
     def free_seq(self, seq: Sequence) -> None:
         self.block_manager.free_slot(seq.seq_id)
