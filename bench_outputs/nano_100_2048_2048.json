@@ -1,0 +1,70 @@
+{
+  "backend": "nano",
+  "model_path": "/home/player/models/Qwen3/Qwen/Qwen3-0___6B",
+  "num_prompts": 100,
+  "max_model_len": 4096,
+  "max_num_seqs": 100,
+  "max_num_batched_tokens": null,
+  "block_size": 128,
+  "seed": 0,
+  "temperature": 0.0,
+  "top_p": 1.0,
+  "top_k": 0,
+  "ignore_eos": true,
+  "warmup_iters": 1,
+  "profile_iters": 1,
+  "elapsed_s": 145.22484862292185,
+  "total_input_tokens": 204800,
+  "requested_output_tokens": 204800,
+  "total_output_tokens": 204800,
+  "total_tokens": 409600,
+  "request_throughput_req_s": 0.688587393605424,
+  "output_throughput_tok_s": 1410.2269821039083,
+  "total_throughput_tok_s": 2820.4539642078166,
+  "avg_input_len": 2048,
+  "avg_requested_output_len": 2048,
+  "avg_actual_output_len": 2048,
+  "actual_output_len_p50": 2048.0,
+  "actual_output_len_p90": 2048.0,
+  "actual_output_len_min": 2048,
+  "actual_output_len_max": 2048,
+  "dataset": {
+    "vocab_size": 151936,
+    "token_id_high_used": 10000,
+    "input_lens_min": 2048,
+    "input_lens_max": 2048,
+    "output_lens_min": 2048,
+    "output_lens_max": 2048
+  },
+  "memory": {
+    "cuda_peak_allocated_gb": null,
+    "cuda_peak_reserved_gb": null,
+    "npu_peak_allocated_gb": 54.9042272567749,
+    "npu_peak_reserved_gb": 58.634765625
+  },
+  "decode_graph_stats": {
+    "configured_batch_sizes": [
+      100
+    ],
+    "captured_batch_sizes": [
+      100
+    ],
+    "disabled_batch_sizes": [],
+    "captures": 1,
+    "replays": 4094,
+    "updates": 4094,
+    "fallbacks": 0,
+    "capture_failures": 0,
+    "captures_by_batch_size": {
+      "100": 1
+    },
+    "replays_by_batch_size": {
+      "100": 4094
+    },
+    "updates_by_batch_size": {
+      "100": 4094
+    },
+    "fallbacks_by_batch_size": {},
+    "capture_failures_by_batch_size": {}
+  }
+}

@@ -11,11 +11,68 @@ A minimal LLM inference engine for Huawei Ascend NPU.
 - Prefix cache (content-addressed block reuse)
 - OpenAI-compatible chat completions API
 
+## Performance
+
+> Qwen3-0.6B · Ascend 910B3 vs vllm-ascend vs vllm (RTX 5090 Laptop) · 随机 token-id 工作负载 · 详细数据见 [docs](docs/nano_vllm_ascend_VS_vllm_ascend_VS_vllm_VS_nano_vlm.md)
+
+### 跨后端吞吐量（32 req × 256 in / 2048 out）
+
+| 后端 | 设备 | output tok/s | total tok/s |
+|------|------|-------------|-------------|
+| **nano-vllm-ascend** | 910B3 | **1296** | **1458** |
+| vllm-ascend | 910B3 | 1255 | 1412 |
+| vllm | 5090 Laptop | 2263 | 2546 |
+| nano-vllm | 5090 Laptop | 2258 | 2540 |
+
+### Ascend 同平台多工作负载对比
+
+| 工作负载 | nano output tok/s | vllm-ascend output tok/s | nano 优势 |
+|----------|-------------------|-------------------------|----------|
+| 32×128/1024 (decode-heavy) | 1453 | 1343 | **+8.2%** |
+| 32×256/2048 (均衡) | 1296 | 1255 | **+3.2%** |
+| 32×2048/2048 (均衡) | 1033 | 975 | **+6.0%** |
+| 32×1024/128 (prefill-heavy) | 1228 | 1313 | -6.5% |
+| 100×2048/2048 (大批量) | 1410 | 1856 | -24.0% |
+
+### ACL Graph 加速效果
+
+| 配置 | decode tok/s | 加速比 |
+|------|-------------|--------|
+| baseline (bs=1, 无 graph) | 18.9 | 1.0× |
+| ACL Graph (bs=1) | 100.8 | **5.3×** |
+| ACL Graph (bs=4) | 372.4 | **19.7×** |
+
+---
+
 ## Install
 
+建议使用 vllm-ascend 官方 Docker 容器，已预装 CANN、torch-npu 等依赖，免去手动配置环境：
+
 ```powershell
-pip install -e .
+# Atlas A2 (910B)
+export IMAGE=quay.io/ascend/vllm-ascend:v0.18.0
+
+# Atlas A3
+# export IMAGE=quay.io/ascend/vllm-ascend:v0.18.0-a3
+
+# 根据实际设备修改 /dev/davinci 编号
+docker run --rm \
+    --name vllm-ascend-env \
+    --shm-size=1g \
+    --device /dev/davinci0 \
+    --device /dev/davinci_manager \
+    --device /dev/devmm_svm \
+    --device /dev/hisi_hdc \
+    -v /usr/local/dcmi:/usr/local/dcmi \
+    -v /usr/local/bin/npu-smi:/usr/local/bin/npu-smi \
+    -v /usr/local/Ascend/driver/lib64/:/usr/local/Ascend/driver/lib64/ \
+    -v /usr/local/Ascend/driver/version.info:/usr/local/Ascend/driver/version.info \
+    -v /etc/ascend_install.info:/etc/ascend_install.info \
+    -v /root/.cache:/root/.cache \
+    -it $IMAGE bash
 ```
+
+> 详细安装方式（pip / Docker / 源码构建）参见 [vllm-ascend 安装文档](https://docs.vllm.ai/projects/ascend/zh-cn/v0.18.0/installation.html)。
 
 ---
 
